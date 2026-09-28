@@ -35,7 +35,7 @@ metadata:
 spec:
   project: kubecommerce
   sources:
-    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    - repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
       targetRevision: main
       ref: values
     - repoURL: https://grafana-community.github.io/helm-charts

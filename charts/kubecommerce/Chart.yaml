@@ -10,10 +10,10 @@ type: application
 version: 0.1.0
 appVersion: "0.1.0"
 kubeVersion: ">=1.28.0-0"
-icon: https://raw.githubusercontent.com/your-github-username/kubecommerce/main/docs/icon.png
-home: https://github.com/your-github-username/kubecommerce
+icon: https://raw.githubusercontent.com/bipulprasadjain007/kubecommerce/main/docs/icon.png
+home: https://github.com/bipulprasadjain007/kubecommerce
 sources:
-  - https://github.com/your-github-username/kubecommerce
+  - https://github.com/bipulprasadjain007/kubecommerce
 keywords:
   - kubecommerce
   - microservices
@@ -21,6 +21,6 @@ keywords:
   - kubernetes
 maintainers:
   - name: kubecommerce
-    url: https://github.com/your-github-username/kubecommerce
+    url: https://github.com/bipulprasadjain007/kubecommerce
 annotations:
   category: Application

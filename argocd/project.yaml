@@ -23,7 +23,7 @@ spec:
   # allowing these repos does not float versions). Replace the git placeholder
   # before syncing (see bootstrap/argocd/README.md).
   sourceRepos:
-    - https://github.com/your-github-username/kubecommerce-gitops.git
+    - https://github.com/bipulprasadjain007/kubecommerce-gitops.git
     - https://prometheus-community.github.io/helm-charts # kube-prometheus-stack, exporters
     - https://grafana.github.io/helm-charts # Loki, Alloy, Tempo
     - https://grafana-community.github.io/helm-charts # Loki/Tempo (community charts)

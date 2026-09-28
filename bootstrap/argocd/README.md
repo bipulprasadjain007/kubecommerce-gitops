@@ -3,24 +3,20 @@
 GitOps bootstrap for KubeCommerce (guide Phase 8). Argo CD installs once from
 Helm; from then on, desired state is reconciled from this repository.
 
-## 1. Replace the repository URL placeholders
+## 1. Repository URLs (already configured)
 
-The manifests use the obvious placeholder
-`https://github.com/your-github-username/kubecommerce-gitops.git`. Replace it in
-**all three** Argo CD manifests before syncing:
+Every Argo CD manifest already points at
+`https://github.com/bipulprasadjain007/kubecommerce-gitops.git`. If you fork or
+rename the repository, update the URL consistently in `argocd/project.yaml`
+(`sourceRepos`), `argocd/applicationset.yaml` (both sources), `argocd/root-app.yaml`
+and the `platform/**/apps/**` Applications:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 cd kubecommerce-gitops
-
-GITOPS_REPO_URL="https://github.com/<your-github-username>/kubecommerce-gitops.git"
-
-sed -i "s#https://github.com/your-github-username/kubecommerce-gitops.git#${GITOPS_REPO_URL}#g" \
-  argocd/project.yaml \
-  argocd/applicationset.yaml \
-  argocd/root-app.yaml
-
-grep -rn "your-github-username" argocd/   # must print nothing
+NEW_URL="https://github.com/<your-org>/<your-repo>.git"
+grep -rl "github.com/bipulprasadjain007/kubecommerce-gitops" argocd platform | \
+  xargs -r sed -i "s#https://github.com/bipulprasadjain007/kubecommerce-gitops.git#${NEW_URL}#g"
 ```
 
 ## 2. Fresh kind cluster sequence
@@ -81,8 +77,8 @@ fine-grained PAT with read-only `contents` scope, never a password):
 ```bash
 kubectl -n argocd create secret generic kubecommerce-gitops-repo \
   --from-literal=type=git \
-  --from-literal=url="https://github.com/<your-github-username>/kubecommerce-gitops.git" \
-  --from-literal=username="<github-username>" \
+  --from-literal=url="https://github.com/bipulprasadjain007/kubecommerce-gitops.git" \
+  --from-literal=username="bipulprasadjain007" \
   --from-literal=password="<github-pat>"
 
 kubectl -n argocd label secret kubecommerce-gitops-repo \

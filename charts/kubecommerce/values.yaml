@@ -20,7 +20,7 @@ global:
   partOf: kubecommerce
   # Registry prefix. Per-service repositories default to
   # <imageRegistry>/kubecommerce-<slug> unless `services.<name>.image.repository` is set.
-  imageRegistry: ghcr.io/your-github-username
+  imageRegistry: ghcr.io/bipulprasadjain007
   imagePullPolicy: IfNotPresent
   # Extra labels merged onto every resource (and per-service labels underneath).
   labels: {}

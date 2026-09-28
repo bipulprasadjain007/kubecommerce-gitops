@@ -36,7 +36,7 @@ spec:
   sources:
     # 1) Values-only source: checked out so `$values` can address a path that
     #    lives outside the chart (`platform/logging/loki-values.yaml`).
-    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    - repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
       targetRevision: main
       ref: values
     # 2) Remote Helm chart, consuming the values via the `$values` ref.

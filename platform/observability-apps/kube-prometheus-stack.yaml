@@ -35,7 +35,7 @@ spec:
   sources:
     # 1) Values-only source: checked out so `$values` can address a path that
     #    lives outside the Helm chart directory.
-    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    - repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
       targetRevision: main
       ref: values
     # 2) Upstream chart source, consuming the values file via the $values ref.

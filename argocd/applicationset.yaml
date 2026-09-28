@@ -51,11 +51,11 @@ spec:
       sources:
         # 1) Values-only source: checked out so `$values` can address paths that
         #    live outside the chart directory.
-        - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+        - repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
           targetRevision: main
           ref: values
         # 2) Chart source, consuming the env values via the $values ref.
-        - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+        - repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
           targetRevision: main
           path: charts/kubecommerce
           helm:

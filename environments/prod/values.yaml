@@ -16,7 +16,7 @@
 
 global:
   environment: prod
-  imageRegistry: ghcr.io/your-github-username
+  imageRegistry: ghcr.io/bipulprasadjain007
   env:
     LOG_LEVEL: INFO
     OTEL_ENABLED: "true"

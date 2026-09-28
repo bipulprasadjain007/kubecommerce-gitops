@@ -11,7 +11,7 @@
 
 global:
   environment: dev
-  imageRegistry: ghcr.io/your-github-username
+  imageRegistry: ghcr.io/bipulprasadjain007
   env:
     LOG_LEVEL: DEBUG
     OTEL_ENABLED: "true"

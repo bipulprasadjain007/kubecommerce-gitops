@@ -24,7 +24,7 @@ spec:
   source:
     # Replace the placeholder with the real GitOps repository URL (see
     # bootstrap/argocd/README.md).
-    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
     targetRevision: main
     path: platform/namespaces
   destination:

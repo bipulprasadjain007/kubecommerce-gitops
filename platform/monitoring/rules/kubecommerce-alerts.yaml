@@ -48,7 +48,7 @@ spec:
               more than 5% 5xx responses over the last 5 minutes
               (current ratio: {{ $value | humanizePercentage }}). Check the
               KubeCommerce - API RED dashboard and the service logs.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#high-error-rate
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#high-error-rate
 
         # --- API p95 latency > 750ms for 10m --------------------------------
         - alert: KubeCommerceApiHighLatencyP95
@@ -71,7 +71,7 @@ spec:
               {{ $labels.namespace }} has been above 750ms for 10 minutes
               (current p95: {{ $value | humanizeDuration }}). Check downstream
               dependencies and the trace waterfall in Tempo.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#high-latency
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#high-latency
 
         # --- Total API outage: all traffic failing with 5xx -----------------
         #
@@ -115,7 +115,7 @@ spec:
               sustained traffic for 5 minutes. The service is effectively down.
               Check the KubeCommerce - API RED dashboard, pod readiness and the
               service logs.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#total-failure
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#total-failure
 
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -151,7 +151,7 @@ spec:
               (namespace {{ $labels.namespace }}) restarted
               {{ $value | humanize }} times in the last 15 minutes. Inspect
               `kubectl describe pod` and the previous container logs.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#crash-loop
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#crash-loop
 
         # --- Deployment has unavailable replicas ----------------------------
         #
@@ -180,7 +180,7 @@ spec:
               has had {{ $value | humanize }} unavailable replica(s) for 10
               minutes. Check rollout status, image pull errors and readiness
               probes.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#unavailable-replicas
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#unavailable-replicas
 
         # --- Container memory working set near its limit --------------------
         - alert: KubeCommerceContainerMemoryNearLimit
@@ -206,7 +206,7 @@ spec:
               (namespace {{ $labels.namespace }}) is using
               {{ $value | humanizePercentage }} of its memory limit for 10
               minutes. Risk of OOMKill; review the limit or the workload leaks.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#memory-pressure
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#memory-pressure
 
         # --- HPA pinned at its maximum replica count ------------------------
         - alert: KubeCommerceHpaAtMaxReplicas
@@ -226,7 +226,7 @@ spec:
               {{ $labels.namespace }} has run at its maximum replica count for
               10 minutes. The service is saturated; raise maxReplicas or reduce
               its cost per request.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#hpa-at-max
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#hpa-at-max
 
     - name: kubecommerce.messaging
       interval: 30s
@@ -246,4 +246,4 @@ spec:
               RabbitMQ dead-letter queue {{ $labels.queue }} has held
               {{ $value | humanize }} message(s) for 5 minutes. Inspect the
               messages in the management UI and replay or discard them.
-            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#dlq-not-empty
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#dlq-not-empty

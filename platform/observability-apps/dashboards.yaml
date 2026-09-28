@@ -24,7 +24,7 @@ metadata:
 spec:
   project: kubecommerce
   source:
-    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
     targetRevision: main
     path: platform/monitoring/dashboards
     directory:
