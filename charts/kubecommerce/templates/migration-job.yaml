@@ -1,0 +1,84 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled $svc.migration.enabled }}
+---
+# One-shot Alembic migration. Annotated for BOTH Helm hooks (pre-install /
+# pre-upgrade) and Argo CD (PreSync) so whichever tool drives the release runs
+# it before the new Deployments roll out. Application startup never migrates.
+#
+# The Job is intentionally DEPENDENCY-FREE: as a pre-install / PreSync hook it
+# runs BEFORE (or independently of) the Sync phase, so it must not reference any
+# resource this chart creates later. It therefore:
+#   * inlines the non-secret env (same kubecommerce.env map the Deployment gets)
+#     instead of using the Sync-phase <svc>-config ConfigMap;
+#   * references only out-of-band Secrets via envFrom.secretRef
+#     (<svc>-secrets is created by `make k8s-secrets` before PreSync);
+#   * sets no ServiceAccount (the <svc> ServiceAccount is Sync-phase) and
+#     disables token automounting.
+# Referencing the ConfigMap or ServiceAccount here caused
+# CreateContainerConfigError on a fresh cluster.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-migrate
+  labels:
+    {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    {{- with $svc.migration.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  backoffLimit: {{ $svc.migration.backoffLimit | default 3 }}
+  ttlSecondsAfterFinished: {{ $svc.migration.ttlSecondsAfterFinished | default 300 }}
+  activeDeadlineSeconds: {{ $svc.migration.activeDeadlineSeconds | default 600 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "kubecommerce.podSecurityContext" (dict "root" $root "name" $name "svc" $svc) | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "kubecommerce.image" (dict "root" $root "name" $name "svc" $svc) | quote }}
+          imagePullPolicy: {{ $svc.image.pullPolicy | default $root.Values.global.imagePullPolicy }}
+          command:
+            {{- toYaml ($svc.migration.command | default (list "alembic" "upgrade" "head")) | nindent 12 }}
+          securityContext:
+            {{- include "kubecommerce.securityContext" (dict "root" $root "name" $name "svc" $svc) | nindent 12 }}
+          {{- if $svc.secretEnvFrom }}
+          envFrom:
+            {{- range $svc.secretEnvFrom }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          env:
+            {{- include "kubecommerce.envList" (dict "root" $root "name" $name "svc" $svc) | nindent 12 }}
+            {{- range $envName, $ref := $svc.secretEnv }}
+            - name: {{ $envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ref.name }}
+                  key: {{ $ref.key | default $envName }}
+                  {{- if hasKey $ref "optional" }}
+                  optional: {{ $ref.optional }}
+                  {{- end }}
+            {{- end }}
+          resources:
+            {{- toYaml ($svc.migration.resources | default $svc.resources) | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- end }}

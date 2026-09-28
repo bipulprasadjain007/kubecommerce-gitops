@@ -1,0 +1,110 @@
+# =============================================================================
+# kubecommerce - STAGING environment overlay (namespace kubecommerce-staging).
+#
+# Layered on top of the chart defaults.
+#   helm upgrade --install kubecommerce charts/kubecommerce \
+#     -n kubecommerce-staging --create-namespace \
+#     -f environments/staging/values.yaml
+#
+# Characteristics: 2 replicas, HPA 2..6 on CPU 65% with a scale-down
+# stabilization window, PDBs that tolerate one voluntary disruption, topology
+# spreading, ServiceMonitors enabled. Image tag is a mutable release tag.
+# =============================================================================
+
+global:
+  environment: staging
+  imageRegistry: ghcr.io/your-github-username
+  env:
+    LOG_LEVEL: INFO
+    OTEL_ENABLED: "true"
+
+services:
+
+  gateway-api:
+    replicas: 2
+    image:
+      tag: staging
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+    pdb:
+      enabled: true
+      minAvailable: 1
+    topologySpread:
+      enabled: true
+    httpRoute:
+      # platform/gateway/httproute.yaml owns the / edge route; the chart route is disabled to avoid a duplicate.
+      enabled: false
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+
+  auth-service:
+    replicas: 2
+    image:
+      tag: staging
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+    pdb:
+      enabled: true
+      minAvailable: 1
+    topologySpread:
+      enabled: true
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+
+  catalog-service:
+    replicas: 2
+    image:
+      tag: staging
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+    pdb:
+      enabled: true
+      minAvailable: 1
+    topologySpread:
+      enabled: true
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+
+  order-service:
+    replicas: 2
+    image:
+      tag: staging
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+    pdb:
+      enabled: true
+      minAvailable: 1
+    topologySpread:
+      enabled: true
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+
+  notification-worker:
+    replicas: 2
+    image:
+      tag: staging
+    # Queue-driven autoscaling is a KEDA exercise (Phase 4.6); CPU HPA stays off.
+    topologySpread:
+      enabled: true
+    pdb:
+      enabled: true
+      minAvailable: 1
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true

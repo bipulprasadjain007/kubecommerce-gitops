@@ -1,0 +1,23 @@
+KubeCommerce has been installed into namespace {{ .Release.Namespace }}.
+
+Release:   {{ .Release.Name }}
+Chart:     {{ .Chart.Name }}-{{ .Chart.Version }}
+Environment: {{ .Values.global.environment }}
+
+Services ({{ len .Values.services }} configured):
+
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.enabled }}
+  * {{ $name }}{{ if $svc.httpRoute.enabled }} (public via HTTPRoute){{ end }} — replicas: {{ $svc.replicas }}, component: {{ $svc.component | default "api" }}
+{{- end }}
+{{- end }}
+
+Check rollout status:
+
+  kubectl get deploy,svc,cm,sa,hpa,pdb -n {{ .Release.Namespace }} -l app.kubernetes.io/part-of=kubecommerce
+  kubectl rollout status deploy/gateway-api -n {{ .Release.Namespace }}
+
+The migration Jobs (`*-migrate`) run as Helm pre-install/pre-upgrade hooks and as
+Argo CD PreSync hooks, so they are created before the Deployments roll out.
+Secrets (`<service>-secrets`) are NOT created by this chart; provision them with
+External Secrets Operator or a local secret workflow before rollout.

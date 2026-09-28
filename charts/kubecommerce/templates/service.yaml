@@ -1,0 +1,25 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 4 }}
+  {{- with $svc.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $svc.service.type | default "ClusterIP" }}
+  selector:
+    {{- include "kubecommerce.selectorLabels" (dict "root" $root "name" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $svc.service.port | default 80 }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
+{{- end }}

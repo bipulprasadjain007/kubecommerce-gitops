@@ -1,0 +1,26 @@
+apiVersion: v2
+name: kubecommerce
+description: >-
+  KubeCommerce application chart. A single values-driven chart that deploys all
+  five stateless services (gateway-api, auth-service, catalog-service,
+  order-service, notification-worker) plus their Service, ConfigMap,
+  ServiceAccount, HPA, PDB, NetworkPolicy, ServiceMonitor, HTTPRoute and
+  Alembic migration Job resources. One release per environment namespace.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.28.0-0"
+icon: https://raw.githubusercontent.com/your-github-username/kubecommerce/main/docs/icon.png
+home: https://github.com/your-github-username/kubecommerce
+sources:
+  - https://github.com/your-github-username/kubecommerce
+keywords:
+  - kubecommerce
+  - microservices
+  - fastapi
+  - kubernetes
+maintainers:
+  - name: kubecommerce
+    url: https://github.com/your-github-username/kubecommerce
+annotations:
+  category: Application

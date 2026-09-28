@@ -1,0 +1,53 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled $svc.hpa.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 4 }}
+  {{- with $svc.hpa.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  minReplicas: {{ $svc.hpa.minReplicas | default 1 }}
+  maxReplicas: {{ $svc.hpa.maxReplicas | default 3 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $svc.hpa.targetCPUUtilizationPercentage | default 65 }}
+    {{- if $svc.hpa.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $svc.hpa.targetMemoryUtilizationPercentage }}
+    {{- end }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ $svc.hpa.behavior.scaleDown.stabilizationWindowSeconds | default 300 }}
+      selectPolicy: {{ $svc.hpa.behavior.scaleDown.selectPolicy | default "Max" }}
+      {{- with $svc.hpa.behavior.scaleDown.policies }}
+      policies:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    scaleUp:
+      stabilizationWindowSeconds: {{ $svc.hpa.behavior.scaleUp.stabilizationWindowSeconds | default 0 }}
+      selectPolicy: {{ $svc.hpa.behavior.scaleUp.selectPolicy | default "Max" }}
+      {{- with $svc.hpa.behavior.scaleUp.policies }}
+      policies:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

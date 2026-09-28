@@ -1,0 +1,40 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled $svc.httpRoute.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  # Distinct from the platform north-south HTTPRoute (also named `gateway-api`)
+  # that lane 3 owns in platform/gateway/httproute.yaml, so two GitOps
+  # controllers never fight over the same object name.
+  name: {{ $name }}-route
+  labels:
+    {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 4 }}
+  {{- with $svc.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml $svc.httpRoute.parentRefs | nindent 4 }}
+  {{- with $svc.httpRoute.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range $svc.httpRoute.rules }}
+    - matches:
+        {{- toYaml .matches | nindent 8 }}
+      {{- if .backendRefs }}
+      backendRefs:
+        {{- toYaml .backendRefs | nindent 8 }}
+      {{- else }}
+      backendRefs:
+        - name: {{ $name }}
+          port: {{ $svc.service.port | default 80 }}
+          weight: 1
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,132 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 4 }}
+  {{- with $svc.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ $svc.replicas }}
+  revisionHistoryLimit: {{ $svc.revisionHistoryLimit | default 3 }}
+  selector:
+    matchLabels:
+      {{- include "kubecommerce.selectorLabels" (dict "root" $root "name" $name) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ $svc.rollingUpdate.maxUnavailable | default 0 }}
+      maxSurge: {{ $svc.rollingUpdate.maxSurge | default 1 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "kubecommerce.env" (dict "root" $root "name" $name "svc" $svc) | sha256sum }}
+        {{- if $svc.image.digest }}
+        kubecommerce.io/image-digest: {{ $svc.image.digest | quote }}
+        {{- end }}
+        {{- with $svc.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "kubecommerce.serviceAccountName" (dict "root" $root "name" $name "svc" $svc) }}
+      automountServiceAccountToken: {{ $svc.serviceAccount.automount | default false }}
+      terminationGracePeriodSeconds: {{ $svc.terminationGracePeriodSeconds | default 30 }}
+      securityContext:
+        {{- include "kubecommerce.podSecurityContext" (dict "root" $root "name" $name "svc" $svc) | nindent 8 }}
+      {{- with $svc.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $svc.topologySpread.enabled }}
+      topologySpreadConstraints:
+        {{- include "kubecommerce.topologySpreadConstraints" (dict "root" $root "name" $name "svc" $svc) | nindent 8 }}
+      {{- end }}
+      {{- with $svc.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $svc.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $svc.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "kubecommerce.image" (dict "root" $root "name" $name "svc" $svc) | quote }}
+          imagePullPolicy: {{ $svc.image.pullPolicy | default $root.Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "kubecommerce.securityContext" (dict "root" $root "name" $name "svc" $svc) | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ $svc.port | default 8000 }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ $name }}-config
+            {{- range $svc.secretEnvFrom }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- if $svc.secretEnv }}
+          env:
+            {{- range $envName, $ref := $svc.secretEnv }}
+            - name: {{ $envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ref.name }}
+                  key: {{ $ref.key | default $envName }}
+                  {{- if hasKey $ref "optional" }}
+                  optional: {{ $ref.optional }}
+                  {{- end }}
+            {{- end }}
+          {{- end }}
+          {{- if $svc.probes.startup.enabled }}
+          startupProbe:
+            {{- include "kubecommerce.probe" (dict "probe" $svc.probes.startup "defaultPath" "/health/live") | nindent 12 }}
+          {{- end }}
+          {{- if $svc.probes.readiness.enabled }}
+          readinessProbe:
+            {{- include "kubecommerce.probe" (dict "probe" $svc.probes.readiness "defaultPath" "/health/ready") | nindent 12 }}
+          {{- end }}
+          {{- if $svc.probes.liveness.enabled }}
+          livenessProbe:
+            {{- include "kubecommerce.probe" (dict "probe" $svc.probes.liveness "defaultPath" "/health/live") | nindent 12 }}
+          {{- end }}
+          {{- $preStop := merge (deepCopy ($svc.preStop | default dict)) ($root.Values.global.preStop | default dict) }}
+          {{- if and $preStop.enabled }}
+          # Graceful drain: give the service a head start before SIGTERM while
+          # endpoints are removed, so in-flight requests finish (uvicorn allows
+          # up to 25s to drain). terminationGracePeriodSeconds must exceed
+          # sleepSeconds + shutdown time.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ if hasKey $preStop "sleepSeconds" }}{{ $preStop.sleepSeconds }}{{ else }}5{{ end }}"]
+          {{- end }}
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- with $svc.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- with $svc.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}
+{{- end }}

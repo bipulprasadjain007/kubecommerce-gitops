@@ -1,0 +1,32 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled $svc.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubecommerce.labels" (dict "root" $root "name" $name "svc" $svc) | nindent 4 }}
+    {{- with $root.Values.global.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $svc.serviceMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kubecommerce.selectorLabels" (dict "root" $root "name" $name) | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ $svc.serviceMonitor.namespace | default $root.Release.Namespace }}
+  endpoints:
+    - port: {{ $svc.serviceMonitor.port | default "http" | quote }}
+      path: {{ $svc.serviceMonitor.path | default "/metrics" | quote }}
+      interval: {{ $svc.serviceMonitor.interval | default "30s" | quote }}
+      scrapeTimeout: {{ $svc.serviceMonitor.scrapeTimeout | default "10s" | quote }}
+      honorLabels: {{ $svc.serviceMonitor.honorLabels | default false }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,934 @@
+# =============================================================================
+# KubeCommerce - default application values.
+#
+# One chart, five services: everything under `services:` is rendered by the same
+# set of templates, so adding a service is a values-only change.
+#
+# Environment overlays live in ../../environments/<env>/values.yaml and are
+# layered on top of this file with `-f`. Environment files only need to carry
+# deltas (replicas, HPA/PDB, digest, resources, feature toggles).
+#
+# Secrets are NEVER stored here. `<service>-secrets` Kubernetes Secrets are
+# expected to exist (External Secrets Operator or a local secret workflow);
+# this chart only references them.
+# =============================================================================
+
+global:
+  # dev | staging | prod - rendered as the `environment` label and ENVIRONMENT env.
+  environment: dev
+  # app.kubernetes.io/part-of label shared by every resource.
+  partOf: kubecommerce
+  # Registry prefix. Per-service repositories default to
+  # <imageRegistry>/kubecommerce-<slug> unless `services.<name>.image.repository` is set.
+  imageRegistry: ghcr.io/your-github-username
+  imagePullPolicy: IfNotPresent
+  # Extra labels merged onto every resource (and per-service labels underneath).
+  labels: {}
+  annotations: {}
+  serviceAccount:
+    # WIF/IRSA/EKS Pod Identity annotations are injected per service when needed.
+    annotations: {}
+    automount: false
+  # Pod-level security context applied to every workload (migration Jobs included).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  # Container-level security context; per-service `securityContext` overrides win.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+    runAsNonRoot: true
+    runAsUser: 999
+  # Graceful drain: a preStop hook sleeps briefly so the Service endpoints are
+  # removed before the container gets SIGTERM. Applied to every service unless a
+  # service overrides `services.<name>.preStop`. Keep each service's
+  # terminationGracePeriodSeconds greater than sleepSeconds + uvicorn's 25s
+  # shutdown window.
+  preStop:
+    enabled: true
+    sleepSeconds: 5
+  # Non-secret env shared by every service. Per-service `env` wins on conflicts.
+  env:
+    LOG_LEVEL: INFO
+    OTEL_ENABLED: "false"
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318
+    OTEL_SAMPLE_RATIO: "1.0"
+  monitoring:
+    # Extra labels for ServiceMonitor objects so a Prometheus instance's
+    # serviceMonitorSelector can pick them up (e.g. release: kube-prometheus-stack).
+    serviceMonitor:
+      labels: {}
+  # NetworkPolicy peer definitions. Override the namespaces/labels to match where
+  # the platform lane installs PostgreSQL, Redis, RabbitMQ and the OTel collector.
+  networkPolicy:
+    # Master switch; per-service `networkPolicy.enabled` can also disable.
+    enabled: true
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      port: 53
+    postgres:
+      namespace: platform-system
+      podLabels:
+        app.kubernetes.io/name: postgresql
+      port: 5432
+    redis:
+      namespace: platform-system
+      podLabels:
+        app.kubernetes.io/name: redis
+      port: 6379
+    rabbitmq:
+      namespace: platform-system
+      podLabels:
+        app.kubernetes.io/name: rabbitmq
+      port: 5672
+    otel:
+      namespace: observability
+      podLabels:
+        app.kubernetes.io/name: otel-collector
+      port: 4318
+    monitoring:
+      namespace: monitoring
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # gateway-api - the only publicly reachable service.
+  # ---------------------------------------------------------------------------
+  gateway-api:
+    enabled: true
+    component: api
+    replicas: 2
+    port: 8000
+    image:
+      # Empty => <global.imageRegistry>/kubecommerce-gateway-api
+      repository: ""
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    imagePullSecrets: []
+    service:
+      type: ClusterIP
+      port: 80
+      annotations: {}
+    serviceAccount:
+      create: true
+      name: ""
+      automount: false
+      annotations: {}
+    podSecurityContext: {}
+    securityContext: {}
+    labels: {}
+    annotations: {}
+    podAnnotations: {}
+    configMapAnnotations: {}
+    terminationGracePeriodSeconds: 40
+    revisionHistoryLimit: 3
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    env:
+      GATEWAY_AUTH_BASE_URL: http://auth-service:8000
+      GATEWAY_CATALOG_BASE_URL: http://catalog-service:8000
+      GATEWAY_ORDER_BASE_URL: http://order-service:8000
+      GATEWAY_JWKS_URL: http://auth-service:8000/.well-known/jwks.json
+      GATEWAY_JWT_ISSUER: kubecommerce-auth
+      GATEWAY_JWT_AUDIENCE: kubecommerce
+      GATEWAY_RATE_LIMIT_PER_MINUTE: "120"
+      GATEWAY_REQUEST_TIMEOUT_SECONDS: "5"
+      GATEWAY_JWKS_CACHE_TTL_SECONDS: "300"
+      GATEWAY_DEPENDENCY_CHECK_INTERVAL_SECONDS: "30"
+    # Secret keys exported as env vars by `envFrom.secretRef`.
+    secretEnvFrom:
+      - gateway-api-secrets
+    # Alternative to secretEnvFrom: explicit secretKeyRef entries.
+    secretEnv: {}
+    probes:
+      startup:
+        enabled: false
+        path: /health/live
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 30
+      readiness:
+        enabled: true
+        path: /health/ready
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      liveness:
+        enabled: true
+        path: /health/live
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        timeoutSeconds: 3
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    hpa:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+      targetMemoryUtilizationPercentage: null
+      annotations: {}
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies: []
+    pdb:
+      enabled: false
+      minAvailable: 1
+      maxUnavailable: null
+      annotations: {}
+    topologySpread:
+      enabled: false
+      maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      extra: []
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    serviceMonitor:
+      enabled: false
+      port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: false
+      namespace: ""
+      annotations: {}
+    httpRoute:
+      enabled: false
+      annotations: {}
+      # The platform lane owns the shared Gateway (platform-system).
+      parentRefs:
+        - name: kubecommerce-gateway
+          namespace: platform-system
+          sectionName: http
+      hostnames: []
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /api
+          backendRefs:
+            - name: gateway-api
+              port: 80
+    migration:
+      enabled: false
+      command:
+        - alembic
+        - upgrade
+        - head
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 300
+      activeDeadlineSeconds: 600
+      resources: {}
+      annotations: {}
+    networkPolicy:
+      enabled: true
+      monitoringIngress: true
+      infraEgress:
+        - dns
+        - redis
+        - otel
+      # Public entry point: accept from anywhere, metrics port included.
+      ingress:
+        - from:
+            - namespaceSelector: {}
+              podSelector: {}
+          ports:
+            - port: 8000
+              protocol: TCP
+      # Reach the internal services it fronts.
+      egress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: auth-service
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: catalog-service
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: order-service
+          ports:
+            - port: 8000
+              protocol: TCP
+    extraVolumes: []
+    extraVolumeMounts: []
+
+  # ---------------------------------------------------------------------------
+  # auth-service - registration, login, JWT/JWKS. PostgreSQL + JWT keys.
+  # ---------------------------------------------------------------------------
+  auth-service:
+    enabled: true
+    component: api
+    replicas: 2
+    port: 8000
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    imagePullSecrets: []
+    service:
+      type: ClusterIP
+      port: 80
+      annotations: {}
+    serviceAccount:
+      create: true
+      name: ""
+      automount: false
+      annotations: {}
+    podSecurityContext: {}
+    securityContext: {}
+    labels: {}
+    annotations: {}
+    podAnnotations: {}
+    configMapAnnotations: {}
+    terminationGracePeriodSeconds: 40
+    revisionHistoryLimit: 3
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    env:
+      AUTH_JWT_ISSUER: kubecommerce-auth
+      AUTH_JWT_AUDIENCE: kubecommerce
+      AUTH_ACCESS_TOKEN_TTL_SECONDS: "900"
+    secretEnvFrom:
+      - auth-service-secrets
+    secretEnv: {}
+    probes:
+      startup:
+        enabled: false
+        path: /health/live
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 30
+      readiness:
+        enabled: true
+        path: /health/ready
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      liveness:
+        enabled: true
+        path: /health/live
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        timeoutSeconds: 3
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    hpa:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+      targetMemoryUtilizationPercentage: null
+      annotations: {}
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies: []
+    pdb:
+      enabled: false
+      minAvailable: 1
+      maxUnavailable: null
+      annotations: {}
+    topologySpread:
+      enabled: false
+      maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      extra: []
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    serviceMonitor:
+      enabled: false
+      port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: false
+      namespace: ""
+      annotations: {}
+    httpRoute:
+      enabled: false
+      annotations: {}
+      parentRefs:
+        - name: kubecommerce-gateway
+          namespace: platform-system
+          sectionName: http
+      hostnames: []
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /
+          backendRefs:
+            - name: auth-service
+              port: 80
+    migration:
+      enabled: true
+      command:
+        - alembic
+        - upgrade
+        - head
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 300
+      activeDeadlineSeconds: 600
+      resources: {}
+      annotations: {}
+    networkPolicy:
+      enabled: true
+      monitoringIngress: true
+      infraEgress:
+        - dns
+        - postgres
+        - otel
+      # Only the gateway and Prometheus may reach auth-service.
+      ingress:
+        - from:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: gateway-api
+          ports:
+            - port: 8000
+              protocol: TCP
+      egress: []
+    extraVolumes: []
+    extraVolumeMounts: []
+
+  # ---------------------------------------------------------------------------
+  # catalog-service - product catalog + inventory. PostgreSQL + Redis cache.
+  # ---------------------------------------------------------------------------
+  catalog-service:
+    enabled: true
+    component: api
+    replicas: 2
+    port: 8000
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    imagePullSecrets: []
+    service:
+      type: ClusterIP
+      port: 80
+      annotations: {}
+    serviceAccount:
+      create: true
+      name: ""
+      automount: false
+      annotations: {}
+    podSecurityContext: {}
+    securityContext: {}
+    labels: {}
+    annotations: {}
+    podAnnotations: {}
+    configMapAnnotations: {}
+    terminationGracePeriodSeconds: 40
+    revisionHistoryLimit: 3
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    env:
+      CATALOG_CACHE_TTL_SECONDS: "60"
+    secretEnvFrom:
+      - catalog-service-secrets
+    secretEnv: {}
+    probes:
+      startup:
+        enabled: false
+        path: /health/live
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 30
+      readiness:
+        enabled: true
+        path: /health/ready
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      liveness:
+        enabled: true
+        path: /health/live
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        timeoutSeconds: 3
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    hpa:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+      targetMemoryUtilizationPercentage: null
+      annotations: {}
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies: []
+    pdb:
+      enabled: false
+      minAvailable: 1
+      maxUnavailable: null
+      annotations: {}
+    topologySpread:
+      enabled: false
+      maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      extra: []
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    serviceMonitor:
+      enabled: false
+      port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: false
+      namespace: ""
+      annotations: {}
+    httpRoute:
+      enabled: false
+      annotations: {}
+      parentRefs:
+        - name: kubecommerce-gateway
+          namespace: platform-system
+          sectionName: http
+      hostnames: []
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /
+          backendRefs:
+            - name: catalog-service
+              port: 80
+    migration:
+      enabled: true
+      command:
+        - alembic
+        - upgrade
+        - head
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 300
+      activeDeadlineSeconds: 600
+      resources: {}
+      annotations: {}
+    networkPolicy:
+      enabled: true
+      monitoringIngress: true
+      infraEgress:
+        - dns
+        - postgres
+        - redis
+        - otel
+      # gateway (public reads) and order-service (stock reserve/release).
+      ingress:
+        - from:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: gateway-api
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: order-service
+          ports:
+            - port: 8000
+              protocol: TCP
+      egress: []
+    extraVolumes: []
+    extraVolumeMounts: []
+
+  # ---------------------------------------------------------------------------
+  # order-service - orders + transactional outbox. PostgreSQL, RabbitMQ,
+  # calls catalog for inventory reservation with compensation.
+  # ---------------------------------------------------------------------------
+  order-service:
+    enabled: true
+    component: api
+    replicas: 2
+    port: 8000
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    imagePullSecrets: []
+    service:
+      type: ClusterIP
+      port: 80
+      annotations: {}
+    serviceAccount:
+      create: true
+      name: ""
+      automount: false
+      annotations: {}
+    podSecurityContext: {}
+    securityContext: {}
+    labels: {}
+    annotations: {}
+    podAnnotations: {}
+    configMapAnnotations: {}
+    terminationGracePeriodSeconds: 45
+    revisionHistoryLimit: 3
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    env:
+      ORDERS_CATALOG_BASE_URL: http://catalog-service:8000
+      ORDERS_REQUEST_TIMEOUT_SECONDS: "5"
+      ORDERS_OUTBOX_POLL_INTERVAL_SECONDS: "2"
+      ORDERS_OUTBOX_BATCH_SIZE: "20"
+    secretEnvFrom:
+      - order-service-secrets
+    secretEnv: {}
+    probes:
+      startup:
+        enabled: false
+        path: /health/live
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 30
+      readiness:
+        enabled: true
+        path: /health/ready
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      liveness:
+        enabled: true
+        path: /health/live
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        timeoutSeconds: 3
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    hpa:
+      enabled: false
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 65
+      targetMemoryUtilizationPercentage: null
+      annotations: {}
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies: []
+    pdb:
+      enabled: false
+      minAvailable: 1
+      maxUnavailable: null
+      annotations: {}
+    topologySpread:
+      enabled: false
+      maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      extra: []
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    serviceMonitor:
+      enabled: false
+      port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: false
+      namespace: ""
+      annotations: {}
+    httpRoute:
+      enabled: false
+      annotations: {}
+      parentRefs:
+        - name: kubecommerce-gateway
+          namespace: platform-system
+          sectionName: http
+      hostnames: []
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /
+          backendRefs:
+            - name: order-service
+              port: 80
+    migration:
+      enabled: true
+      command:
+        - alembic
+        - upgrade
+        - head
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 300
+      activeDeadlineSeconds: 600
+      resources: {}
+      annotations: {}
+    networkPolicy:
+      enabled: true
+      monitoringIngress: true
+      infraEgress:
+        - dns
+        - postgres
+        - rabbitmq
+        - otel
+      # Only the gateway fronts order-service.
+      ingress:
+        - from:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: gateway-api
+          ports:
+            - port: 8000
+              protocol: TCP
+      # Reserve/release inventory in catalog.
+      egress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: catalog-service
+          ports:
+            - port: 8000
+              protocol: TCP
+    extraVolumes: []
+    extraVolumeMounts: []
+
+  # ---------------------------------------------------------------------------
+  # notification-worker - consumes order.created. RabbitMQ + Redis, no ingress
+  # except the Prometheus metrics scrape. Scales on queue depth later (KEDA).
+  # ---------------------------------------------------------------------------
+  notification-worker:
+    enabled: true
+    component: worker
+    replicas: 2
+    port: 8000
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+      pullPolicy: ""
+    imagePullSecrets: []
+    service:
+      type: ClusterIP
+      port: 80
+      annotations: {}
+    serviceAccount:
+      create: true
+      name: ""
+      automount: false
+      annotations: {}
+    podSecurityContext: {}
+    securityContext: {}
+    labels: {}
+    annotations: {}
+    podAnnotations: {}
+    configMapAnnotations: {}
+    terminationGracePeriodSeconds: 60
+    revisionHistoryLimit: 3
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    env:
+      WORKER_WEBHOOK_URL: ""
+      WORKER_MAX_RETRIES: "3"
+      WORKER_PREFETCH: "10"
+      WORKER_DEDUPE_TTL_SECONDS: "604800"
+      WORKER_PROCESSING_TTL_SECONDS: "60"
+      WORKER_WEBHOOK_TIMEOUT_SECONDS: "5"
+    secretEnvFrom:
+      - notification-worker-secrets
+    secretEnv: {}
+    probes:
+      startup:
+        enabled: false
+        path: /health/live
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 30
+      readiness:
+        enabled: true
+        path: /health/ready
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      liveness:
+        enabled: true
+        path: /health/live
+        initialDelaySeconds: 10
+        periodSeconds: 20
+        timeoutSeconds: 3
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    hpa:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 4
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: null
+      annotations: {}
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          selectPolicy: Max
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies: []
+    pdb:
+      enabled: false
+      minAvailable: 1
+      maxUnavailable: null
+      annotations: {}
+    topologySpread:
+      enabled: false
+      maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      extra: []
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    serviceMonitor:
+      enabled: false
+      port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: false
+      namespace: ""
+      annotations: {}
+    httpRoute:
+      enabled: false
+      annotations: {}
+      parentRefs:
+        - name: kubecommerce-gateway
+          namespace: platform-system
+          sectionName: http
+      hostnames: []
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /
+          backendRefs:
+            - name: notification-worker
+              port: 80
+    migration:
+      enabled: false
+      command:
+        - alembic
+        - upgrade
+        - head
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 300
+      activeDeadlineSeconds: 600
+      resources: {}
+      annotations: {}
+    networkPolicy:
+      enabled: true
+      monitoringIngress: true
+      # Broker + dedupe Redis + tracing only; no service-to-service calls.
+      infraEgress:
+        - dns
+        - rabbitmq
+        - redis
+        - otel
+      ingress: []
+      egress:
+        # Outbound webhook sink (WORKER_WEBHOOK_URL) is deliberately left to the
+        # environment overlay: add an explicit egress rule when it is enabled.
+        []
+    extraVolumes: []
+    extraVolumeMounts: []

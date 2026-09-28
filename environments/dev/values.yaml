@@ -1,0 +1,97 @@
+# =============================================================================
+# kubecommerce - DEV environment overlay (namespace kubecommerce-dev).
+#
+# Layered on top of the chart defaults: only deltas live here.
+#   helm upgrade --install kubecommerce charts/kubecommerce \
+#     -n kubecommerce-dev --create-namespace -f environments/dev/values.yaml
+#
+# Characteristics: single replica, HPA/PDB off, modest resources, mutable `dev`
+# image tag (rebuilt by CI), local NetworkPolicy enforced only if the CNI does.
+# =============================================================================
+
+global:
+  environment: dev
+  imageRegistry: ghcr.io/your-github-username
+  env:
+    LOG_LEVEL: DEBUG
+    OTEL_ENABLED: "true"
+
+services:
+
+  gateway-api:
+    replicas: 1
+    image:
+      tag: dev
+    httpRoute:
+      # platform/gateway/httproute.yaml owns the / edge route; the chart route is disabled to avoid a duplicate.
+      enabled: false
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  auth-service:
+    replicas: 1
+    image:
+      tag: dev
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  catalog-service:
+    replicas: 1
+    image:
+      tag: dev
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  order-service:
+    replicas: 1
+    image:
+      tag: dev
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  notification-worker:
+    replicas: 1
+    image:
+      tag: dev
+    serviceMonitor:
+      # Phase E: Prometheus Operator CRDs are installed by platform-observability.
+      enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "kubecommerce Helm values",
+  "description": "Top-level schema for the KubeCommerce application chart. Guards the shape of global settings and the services map so obvious mistakes fail helm lint --strict / helm template.",
+  "type": "object",
+  "required": ["global", "services"],
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object",
+      "required": ["environment", "imageRegistry", "imagePullPolicy"],
+      "additionalProperties": true,
+      "properties": {
+        "environment": {
+          "type": "string",
+          "enum": ["dev", "staging", "prod"]
+        },
+        "partOf": { "type": "string", "minLength": 1 },
+        "imageRegistry": { "type": "string", "minLength": 1 },
+        "imagePullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "serviceAccount": { "type": "object" },
+        "podSecurityContext": { "type": "object" },
+        "securityContext": { "type": "object" },
+        "preStop": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "sleepSeconds": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "monitoring": { "type": "object" },
+        "networkPolicy": { "type": "object" }
+      }
+    },
+    "services": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["enabled", "replicas", "port", "image"],
+        "additionalProperties": true,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "component": { "type": "string" },
+          "replicas": { "type": "integer", "minimum": 0 },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "image": {
+            "type": "object",
+            "required": ["repository", "tag", "digest"],
+            "additionalProperties": true,
+            "properties": {
+              "repository": { "type": "string" },
+              "tag": { "type": "string" },
+              "digest": {
+                "type": "string",
+                "pattern": "^$|^sha256:[0-9a-f]{64}$"
+              },
+              "pullPolicy": {
+                "type": "string",
+                "enum": ["", "Always", "IfNotPresent", "Never"]
+              }
+            }
+          },
+          "imagePullSecrets": { "type": "array" },
+          "service": { "type": "object" },
+          "serviceAccount": { "type": "object" },
+          "podSecurityContext": { "type": "object" },
+          "securityContext": { "type": "object" },
+          "preStop": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "sleepSeconds": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "labels": { "type": "object" },
+          "annotations": { "type": "object" },
+          "podAnnotations": { "type": "object" },
+          "configMapAnnotations": { "type": "object" },
+          "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+          "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+          "rollingUpdate": { "type": "object" },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "secretEnvFrom": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "secretEnv": { "type": "object" },
+          "probes": { "type": "object" },
+          "resources": { "type": "object" },
+          "hpa": { "type": "object" },
+          "pdb": { "type": "object" },
+          "topologySpread": { "type": "object" },
+          "nodeSelector": { "type": "object" },
+          "tolerations": { "type": "array" },
+          "affinity": { "type": "object" },
+          "serviceMonitor": { "type": "object" },
+          "httpRoute": { "type": "object" },
+          "migration": { "type": "object" },
+          "networkPolicy": { "type": "object" },
+          "extraVolumes": { "type": "array" },
+          "extraVolumeMounts": { "type": "array" }
+        }
+      }
+    }
+  }
+}
