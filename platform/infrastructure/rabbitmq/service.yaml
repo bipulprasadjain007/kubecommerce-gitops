@@ -1,0 +1,36 @@
+# RabbitMQ Service. The name MUST stay exactly `rabbitmq` so DNS resolves to
+# rabbitmq.platform-system.svc.cluster.local (used in the app secret URLs).
+#
+# Ports:
+#   amqp       5672  - application AMQP clients (order-service, worker)
+#   management 15672 - management UI/API (cluster-internal only)
+#   prometheus 15692 - built-in metrics, scraped by servicemonitor.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: message-broker
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: kubecommerce-infra
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+      protocol: TCP
+    - name: management
+      port: 15672
+      targetPort: management
+      protocol: TCP
+    - name: prometheus
+      port: 15692
+      targetPort: prometheus
+      protocol: TCP

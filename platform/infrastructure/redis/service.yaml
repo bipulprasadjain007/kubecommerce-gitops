@@ -1,0 +1,24 @@
+# Redis Service. The name MUST stay exactly `redis` so DNS resolves to
+# redis.platform-system.svc.cluster.local (used in the app secret URLs, with a
+# logical db suffix such as /0 catalog, /1 worker, /2 gateway).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: kubecommerce-infra
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP

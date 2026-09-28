@@ -1,0 +1,144 @@
+# =============================================================================
+# Redis 7 (official redis:7-alpine image) for the local kind cluster.
+#
+# Purpose per docs/architecture.md: catalog read-through cache (db 0), worker
+# idempotency keys (db 1), gateway rate-limit counters (db 2). Logical databases
+# are selected in the URLs, not here.
+#
+# The Service in service.yaml is named exactly `redis`:
+#   redis.platform-system.svc.cluster.local:6379
+#
+# Password comes from Secret `kubecommerce-infra-secrets` (key: redis-password);
+# see secret.example.yaml / README.md. AOF persistence is enabled so state
+# survives a pod restart (it is a cache/dedupe store, so RDB-only would also be
+# acceptable, but appendonly matches compose.yaml).
+#
+# Labels include `app.kubernetes.io/name: redis` so the app chart NetworkPolicy
+# peer selectors match (charts/kubecommerce/values.yaml global.networkPolicy).
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/managed-by: argocd
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/instance: kubecommerce-infra
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/instance: kubecommerce-infra
+        app.kubernetes.io/part-of: kubecommerce
+        app.kubernetes.io/component: cache
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # Official redis:7-alpine image creates `redis` as uid 999 / gid 1000.
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 1000
+            capabilities:
+              drop:
+                - ALL
+          # Run through a shell so the password is expanded from the Secret env
+          # var at runtime (never baked into args/manifest). Redis writes AOF/RDB
+          # into the PVC mounted at /data (the image WORKDIR).
+          command:
+            - sh
+            - -c
+            - exec redis-server --appendonly yes --requirepass "$REDIS_PASSWORD"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kubecommerce-infra-secrets
+                  key: redis-password
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: redis
+          app.kubernetes.io/instance: kubecommerce-infra
+          app.kubernetes.io/part-of: kubecommerce
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # No storageClassName => cluster default (kind: `standard`, EKS: `gp3`).
+        # To pin explicitly, uncomment and set the value for your cluster:
+        # storageClassName: standard
+        resources:
+          requests:
+            storage: 2Gi

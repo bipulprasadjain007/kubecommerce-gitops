@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: message-broker
+    app.kubernetes.io/managed-by: argocd
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: kubecommerce-infra
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/instance: kubecommerce-infra
+        app.kubernetes.io/part-of: kubecommerce
+        app.kubernetes.io/component: message-broker
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # Official rabbitmq:3.13-management-alpine image creates `rabbitmq`
+        # as uid 100 / gid 101.
+        runAsUser: 100
+        runAsGroup: 101
+        fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.13-management-alpine
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 101
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: amqp
+              containerPort: 5672
+              protocol: TCP
+            - name: management
+              containerPort: 15672
+              protocol: TCP
+            - name: prometheus
+              containerPort: 15692
+              protocol: TCP
+          env:
+            # Applied only on first boot against an empty data directory; later
+            # credential changes go through `rabbitmqctl change_password`.
+            - name: RABBITMQ_DEFAULT_USER
+              value: kubecommerce
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: kubecommerce-infra-secrets
+                  key: rabbitmq-password
+          startupProbe:
+            exec:
+              command:
+                - rabbitmq-diagnostics
+                - -q
+                - ping
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command:
+                - rabbitmq-diagnostics
+                - -q
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - rabbitmq-diagnostics
+                - -q
+                - ping
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+            - name: enabled-plugins
+              mountPath: /etc/rabbitmq/enabled_plugins
+              subPath: enabled_plugins
+              readOnly: true
+            # Prometheus per-object metrics require prometheus.return_per_object_metrics
+            # = true (configmap-rabbitmq-conf.yaml); without it the DLQ/queue-depth
+            # series are absent from /metrics.
+            - name: rabbitmq-conf
+              mountPath: /etc/rabbitmq/rabbitmq.conf
+              subPath: rabbitmq.conf
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: enabled-plugins
+          configMap:
+            name: rabbitmq-enabled-plugins
+        - name: rabbitmq-conf
+          configMap:
+            name: rabbitmq-conf
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: rabbitmq
+          app.kubernetes.io/instance: kubecommerce-infra
+          app.kubernetes.io/part-of: kubecommerce
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # No storageClassName => cluster default (kind: `standard`, EKS: `gp3`).
+        # To pin explicitly, uncomment and set the value for your cluster:
+        # storageClassName: standard
+        resources:
+          requests:
+            storage: 2Gi

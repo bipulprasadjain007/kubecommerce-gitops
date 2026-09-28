@@ -1,0 +1,42 @@
+# =============================================================================
+# RabbitMQ advanced configuration (`rabbitmq.conf`).
+#
+# Mounted as a single file at /etc/rabbitmq/rabbitmq.conf via subPath. RabbitMQ
+# reads this default config file at start (no RABBITMQ_CONFIG_FILE override).
+#
+# Why this exists: the rabbitmq_prometheus plugin returns only AGGREGATE metrics
+# from /metrics by default. Per-object series such as
+# `rabbitmq_queue_messages{queue="kubecommerce.notifications.order-created"}`
+# (and the matching DLQ series) are emitted only when
+# `prometheus.return_per_object_metrics = true`. The DLQ alert and queue-depth
+# dashboard panels depend on those per-object series, so the flag is required.
+#
+# Cardinality trade-off: per-object metrics scale with the number of queues,
+# connections and channels, which increases scrape payload and Prometheus
+# series count. In this portfolio cluster the object count is tiny (one queue
+# plus its retry/DLQ siblings), so the trade-off is negligible. On a large
+# broker, leave this at the default (`false`) and use /metrics/per-object on a
+# separate, lower-frequency scrape instead.
+#
+# The flag applies to the DEFAULT `/metrics` endpoint (which then returns both
+# aggregate and per-object series); the plugin's dedicated `/metrics/per-object`
+# endpoint always returns per-object series. The ServiceMonitor therefore stays
+# on `/metrics`.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-conf
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: message-broker
+    app.kubernetes.io/managed-by: argocd
+data:
+  rabbitmq.conf: |
+    # Serve per-object (per-queue/connection/channel) metrics from /metrics.
+    # Required for rabbitmq_queue_messages{queue=...} and the DLQ alert.
+    # Cardinality grows with the number of objects on the broker.
+    prometheus.return_per_object_metrics = true

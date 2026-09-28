@@ -1,0 +1,33 @@
+# =============================================================================
+# RabbitMQ 3.13 (official rabbitmq:3.13-management-alpine image).
+#
+# The management UI/API plugin and the built-in Prometheus plugin are enabled.
+# The Phase E monitoring stack scrapes the built-in plugin on :15692 via the
+# ServiceMonitor in this directory (it needs no separate exporter).
+#
+# Credentials: default user `kubecommerce`, password from Secret
+# `kubecommerce-infra-secrets` (key: rabbitmq-password). See README.md.
+#
+# The Service in service.yaml is named exactly `rabbitmq`:
+#   rabbitmq.platform-system.svc.cluster.local:5672
+#
+# Labels include `app.kubernetes.io/name: rabbitmq` so the app chart
+# NetworkPolicy peer selectors match (charts/kubecommerce/values.yaml
+# global.networkPolicy).
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-enabled-plugins
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: message-broker
+    app.kubernetes.io/managed-by: argocd
+data:
+  # Mounted as a single file at /etc/rabbitmq/enabled_plugins via subPath. The
+  # trailing "." terminates the Erlang term list, as RabbitMQ requires.
+  enabled_plugins: |
+    [rabbitmq_management,rabbitmq_prometheus].

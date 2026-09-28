@@ -1,0 +1,39 @@
+# PostgreSQL first-boot initialization.
+#
+# Mounted at /docker-entrypoint-initdb.d/ in the postgres StatefulSet. The
+# official image executes every *.sql file there ONLY when the data directory is
+# empty (i.e. on a brand-new PersistentVolume). It is a no-op on restarts and on
+# an existing volume, so database/role changes made later need a migration or a
+# manual `CREATE DATABASE` (never rely on this file to alter an existing DB).
+#
+# The SQL is idempotent (guarded by pg_database) so replaying it after wiping
+# and re-initializing the volume is safe.
+#
+# The application role `kubecommerce` already exists because it is
+# POSTGRES_USER in the StatefulSet, and it owns the three databases below
+# (auth-service -> auth_db, catalog-service -> catalog_db,
+#  order-service -> orders_db). See docs/architecture.md section 4.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: database
+    app.kubernetes.io/managed-by: argocd
+data:
+  10-init-databases.sql: |
+    -- Runs once, on an empty data directory only.
+    \set ON_ERROR_STOP on
+
+    SELECT 'CREATE DATABASE auth_db OWNER kubecommerce'
+    WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'auth_db')\gexec
+
+    SELECT 'CREATE DATABASE catalog_db OWNER kubecommerce'
+    WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'catalog_db')\gexec
+
+    SELECT 'CREATE DATABASE orders_db OWNER kubecommerce'
+    WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'orders_db')\gexec

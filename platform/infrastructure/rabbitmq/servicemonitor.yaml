@@ -1,0 +1,34 @@
+# Scrapes RabbitMQ's built-in prometheus plugin (:15692). No exporter sidecar is
+# needed. The Phase E kube-prometheus-stack is configured with
+# `serviceMonitorSelectorNilUsesHelmValues: false` (open selector), so this
+# resource is picked up automatically once the CRD exists.
+#
+# Path stays on /metrics: configmap-rabbitmq-conf.yaml sets
+# `prometheus.return_per_object_metrics = true`, which makes /metrics return the
+# per-object series (e.g. rabbitmq_queue_messages{queue=...}) the DLQ alert and
+# queue-depth panels rely on. Without that flag only /metrics/per-object would
+# carry them.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rabbitmq
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: message-broker
+    app.kubernetes.io/managed-by: argocd
+spec:
+  namespaceSelector:
+    matchNames:
+      - platform-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: kubecommerce-infra
+  endpoints:
+    - port: prometheus
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

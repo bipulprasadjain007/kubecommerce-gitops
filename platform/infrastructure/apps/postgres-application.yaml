@@ -1,0 +1,45 @@
+# Argo CD Application for in-cluster PostgreSQL (platform-system).
+#
+# Applied as part of the platform app-of-apps. It is intentionally a plain
+# Application (not part of argocd/applicationset.yaml, which only generates the
+# per-environment app-chart Applications).
+#
+# targetRevision notes: pin to a tag/sha in staging/prod; `main` is fine for dev.
+#
+# DEV automation (prune + selfHeal) is enabled below. In staging/prod, disable
+# automated sync so infrastructure changes are reviewed/applied deliberately, and
+# point the application secrets at managed services (RDS/Aurora) instead of
+# running this StatefulSet at all. See README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-postgres
+  namespace: argocd
+  annotations:
+    # Applied before the app chart (which has no wave / wave 0).
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: shared-infrastructure
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    # Placeholder: replace with the real GitOps repository URL.
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/infrastructure/postgres
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platform-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      # ServiceMonitor/CRDs may not exist yet during bootstrap.
+      - SkipDryRunOnMissingResource=true

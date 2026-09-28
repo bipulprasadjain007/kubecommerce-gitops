@@ -1,0 +1,23 @@
+# PostgreSQL Service. The name MUST stay exactly `postgres` so DNS resolves to
+# postgres.platform-system.svc.cluster.local (used in the app secret URLs).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: kubecommerce-infra
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: database
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: kubecommerce-infra
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
