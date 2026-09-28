@@ -1,0 +1,158 @@
+# Helm values for Grafana Alloy - KubeCommerce log collection (local/kind).
+#
+# Chart: alloy 1.13.0 (appVersion v1.20.0)
+# Repo : https://grafana.github.io/helm-charts
+# Consumed by: platform/observability-apps/alloy.yaml (Argo multi-source $values).
+#
+# Runs as a DaemonSet (one Alloy per node) in namespace `observability`. It
+# reads pod logs for namespaces matching `kubecommerce-.*` (through the
+# Kubernetes API, so it needs pods/pods-log RBAC), enriches each stream with
+# namespace/pod/container/app labels, parses the services' JSON logs and pushes
+# to the fixed Loki endpoint:
+#   http://loki.observability.svc.cluster.local:3100/loki/api/v1/push
+#
+# No Promtail: Alloy is the log collector.
+# No hostPath mounts: logs are read via the Kubernetes API (`loki.source.kubernetes`),
+# which keeps the DaemonSet portable and avoids privileged host access.
+
+controller:
+  type: daemonset
+
+alloy:
+  # Enable Alloy's own HTTP server/UI port (chart default; used for readiness).
+  enableHttpServerPort: true
+
+  # `NODE_NAME` is used by the discovery selector below so each Alloy only reads
+  # logs for pods scheduled on its own node (avoids N duplicate copies of every
+  # stream across the DaemonSet).
+  extraEnv:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+
+  # No host filesystem mounts on the local path.
+  mounts:
+    varlog: false
+    dockercontainers: false
+
+  configMap:
+    create: true
+    content: |-
+      // Discover Kubernetes pods visible to this node only.
+      discovery.kubernetes "kubecommerce_pods" {
+        role = "pod"
+
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("NODE_NAME")
+        }
+      }
+
+      // Restrict to the KubeCommerce application namespaces and project the
+      // metadata we want onto the log stream labels.
+      discovery.relabel "kubecommerce_pods" {
+        targets = discovery.kubernetes.kubecommerce_pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          regex         = "kubecommerce-.*"
+          action        = "keep"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+
+        // `app` = the service slug (app.kubernetes.io/name from the app chart),
+        // with a fallback to the legacy `app` pod label.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          regex         = ".+"
+          target_label  = "app"
+        }
+      }
+
+      // Tail the selected pods' logs via the Kubernetes API (needs pods/pods-log
+      // RBAC, which this chart grants by default).
+      loki.source.kubernetes "kubecommerce" {
+        targets    = discovery.relabel.kubecommerce_pods.output
+        forward_to = [loki.process.kubecommerce.receiver]
+      }
+
+      // Parse the JSON log lines emitted by the services (structlog) and lift
+      // high-cardinality-friendly fields into labels/structured metadata.
+      loki.process "kubecommerce" {
+        forward_to = [loki.write.loki.receiver]
+
+        stage.json {
+          expressions = {
+            service  = "service",
+            level    = "level",
+            trace_id = "trace_id",
+          }
+        }
+
+        // structlog emits the log level as `level`; surface it as the
+        // `severity` stream label required by the log contract. `service` is
+        // the emitting service name (for example "order-service").
+        stage.labels {
+          values = {
+            service  = "",
+            severity = "level",
+          }
+        }
+
+        // trace_id stays out of the index (high cardinality) but is queryable
+        // and lets Grafana pivot from a Tempo trace to its logs.
+        stage.structured_metadata {
+          values = {
+            trace_id = "",
+          }
+        }
+      }
+
+      loki.write "loki" {
+        endpoint {
+          url = "http://loki.observability.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+
+# Cluster-wide RBAC is required to list/watch pods and read pod logs across the
+# `kubecommerce-*` namespaces. The chart's default rules already include
+# pods, pods/log and namespaces; rbac.create stays true (the chart default).
+rbac:
+  create: true
+  namespaces: []
+
+# Reload the Alloy config when the ConfigMap changes.
+configReloader:
+  enabled: true
+
+# Keep Alloy's own Service and internal ports; nothing external needs a route.
+service:
+  enabled: true

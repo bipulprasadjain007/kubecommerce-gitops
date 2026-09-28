@@ -1,0 +1,73 @@
+# Argo CD Application: prometheus-postgres-exporter for KubeCommerce.
+#
+# Scrapes the shared PostgreSQL StatefulSet (platform-system/postgres) so the
+# lane-1 Grafana "Messaging & Data" dashboard panels have data:
+#   * PostgreSQL connections : pg_stat_activity_count{datname=~"auth_db|catalog_db|orders_db"}
+#                              max(pg_settings_max_connections)
+#   * also exposes pg_stat_database_* counters.
+#
+# Wave 1 within the `kubecommerce-platform-observability` app-of-apps: applied
+# after kube-prometheus-stack (wave 0, installs the Prometheus Operator CRDs that
+# the ServiceMonitor needs) and alongside the dashboards Application (wave 1).
+#
+# Chart: prometheus-community/prometheus-postgres-exporter 8.2.0 (appVersion v0.20.1)
+#   https://prometheus-community.github.io/helm-charts
+# (sourceRepo already whitelisted in argocd/project.yaml.)
+#
+# Multi-source `$values` pattern (same as kube-prometheus-stack.yaml): the first
+# source is a values-only checkout of this repo providing `$values`; the second
+# source is the remote Helm chart and reads
+# platform/exporters/postgres-exporter-values.yaml through that ref.
+#
+# Credentials: the values file sets the chart's `config.datasourceSecret` ->
+# Secret `observability/postgres-exporter-secret`, key `DATA_SOURCE_NAME`, created
+# out-of-band by scripts/k8s-dev-secrets.sh (`make k8s-secrets`). Never in Git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: postgres-exporter
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: exporters
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  sources:
+    # 1) Values-only source: checked out so `$values` can address a path that
+    #    lives outside the Helm chart directory.
+    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+      targetRevision: main
+      ref: values
+    # 2) Upstream chart source, consuming the values file via the $values ref.
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: prometheus-postgres-exporter
+      targetRevision: 8.2.0
+      helm:
+        releaseName: postgres-exporter
+        valueFiles:
+          - $values/platform/exporters/postgres-exporter-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Namespace `observability` is created by platform/namespaces/namespaces.yaml.
+      - CreateNamespace=false
+      # Deterministic field ownership.
+      - ServerSideApply=true
+      # The ServiceMonitor CRD may not be Established on the very first pass.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 3

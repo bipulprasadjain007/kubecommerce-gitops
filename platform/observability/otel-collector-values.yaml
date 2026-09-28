@@ -1,0 +1,135 @@
+# Helm values for the OpenTelemetry Collector - KubeCommerce OTLP gateway.
+#
+# Chart: opentelemetry-collector 0.173.1 (appVersion 0.160.0)
+# Repo : https://open-telemetry.github.io/opentelemetry-helm-charts
+# Consumed by: platform/observability-apps/otel-collector.yaml (Argo multi-source $values).
+#
+# ---------------------------------------------------------------------------
+# SERVICE / DNS + LABEL CONTRACT (fixed interface)
+# ---------------------------------------------------------------------------
+# Release name `otel-collector` + namespace `observability` renders:
+#   Service : otel-collector.observability.svc.cluster.local
+#   Ports   : 4317 (OTLP gRPC), 4318 (OTLP HTTP)
+#   Apps    : OTLP/HTTP -> http://otel-collector.observability.svc.cluster.local:4318
+# Traces are exported to Tempo at tempo.observability.svc.cluster.local:4317.
+#
+# The app chart's NetworkPolicy egress peer matches the collector pod by
+#   namespaceSelector: kubernetes.io/metadata.name=observability
+#   podSelector:       app.kubernetes.io/name=otel-collector
+#   port:              4318
+# so the rendered Pod (and Service) MUST carry
+#   app.kubernetes.io/name: otel-collector
+#   app.kubernetes.io/part-of: kubecommerce
+#
+# `nameOverride: otel-collector` makes the chart's selector/common labels and
+# the resource names use `otel-collector` (instead of the chart name
+# `opentelemetry-collector`).
+#
+# The chart HARDCODES `app.kubernetes.io/part-of: opentelemetry-collector` in its
+# common labels and has no `service.labels` field. Overriding it through
+# `additionalLabels` emits the key twice in one map, which `kubeconform -strict`
+# (and any strict YAML parser) rejects. So we:
+#   - put `app.kubernetes.io/part-of: kubecommerce` on the Pod via `podLabels`
+#     (this is the NetworkPolicy peer that actually matters), and
+#   - disable the chart Service (`service.enabled: false`) and render an
+#     equivalent contract-exact Service via `extraManifests` (below).
+# The chart still owns the Deployment, ConfigMap, ServiceAccount and RBAC.
+#
+# This chart version ships an EMPTY default `image.repository` and empty
+# `command.name`; both MUST be set explicitly or the pod cannot start.
+# ---------------------------------------------------------------------------
+
+nameOverride: otel-collector
+
+# Single-replica gateway Deployment (not a per-node agent).
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s
+  # tag omitted on purpose -> chart appVersion (0.160.0)
+
+command:
+  # Binary shipped by the -k8s distribution image.
+  name: otelcol-k8s
+
+# Pod labels: the NetworkPolicy egress peer matching this collector pod.
+podLabels:
+  app.kubernetes.io/part-of: kubecommerce
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Expose only the OTLP ports on the Service; the default Jaeger/Zipkin ports are
+# not configured in the receiver list below, so disable them to avoid dead ports.
+ports:
+  otlp:
+    enabled: true
+  otlp-http:
+    enabled: true
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+  metrics:
+    enabled: false
+
+# Use the chart's own Service (name `otel-collector` via nameOverride, selector
+# matching the rendered Deployment, ports 4317/4318 from the `ports:` block).
+# The app NetworkPolicy egress peer matches POD labels
+# (`app.kubernetes.io/name=otel-collector`), which `podLabels` below satisfies,
+# so no Service-level `part-of` override is required.
+service:
+  enabled: true
+
+# Use `alternateConfig` instead of `config` so ONLY the traces pipeline below is
+# rendered: `config` is deep-merged with the chart defaults, which would keep the
+# default logs/metrics pipelines and their Jaeger/Zipkin/Prometheus receivers.
+# The health_check extension is mandatory (the chart probes it).
+alternateConfig:
+  extensions:
+    health_check:
+      endpoint: ${env:MY_POD_IP}:13133
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: ${env:MY_POD_IP}:4317
+        http:
+          endpoint: ${env:MY_POD_IP}:4318
+  processors:
+    # Bound memory using the container limit (limit_percentage).
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch: {}
+  exporters:
+    # OTLP gRPC exporter to Tempo. `otlp_grpc` is the current name in collector
+    # 0.160 (the chart auto-rewrites the deprecated `otlp` alias).
+    otlp_grpc/tempo:
+      endpoint: tempo.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+  service:
+    extensions:
+      - health_check
+    pipelines:
+      # Traces only: logs are shipped by Alloy directly to Loki.
+      traces:
+        receivers:
+          - otlp
+        processors:
+          - memory_limiter
+          - batch
+        exporters:
+          - otlp_grpc/tempo

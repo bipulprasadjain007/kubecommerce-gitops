@@ -1,0 +1,69 @@
+# Helm values for Grafana Tempo - KubeCommerce distributed tracing (local/kind).
+#
+# Chart: tempo 3.0.0 (appVersion 3.0.3)
+# Repo : https://grafana-community.github.io/helm-charts
+# Consumed by: platform/observability-apps/tempo.yaml (Argo multi-source $values).
+#
+# ---------------------------------------------------------------------------
+# SERVICE / DNS CONTRACT (fixed interface, owned by lane 1 monitoring + apps)
+# ---------------------------------------------------------------------------
+# Release name `tempo` + namespace `observability` renders:
+#   Service : tempo.observability.svc.cluster.local
+#   Ports   : 3200 (HTTP API/query + /ready), 4317 (OTLP gRPC), 4318 (OTLP HTTP)
+# The OpenTelemetry Collector exports traces to tempo.observability...:4317
+# (insecure gRPC). Grafana (lane 1) uses :3200 as the Tempo datasource.
+#
+# ---------------------------------------------------------------------------
+# TEMPO 3.x UPGRADE NOTE (read before changing this pin)
+# ---------------------------------------------------------------------------
+# Tempo 3.x removed the 2.x `ingester` and `compactor` roles:
+#   - the ingester is replaced by the `live_store` (recent traces in memory).
+#   - the compactor is replaced by the `backend_scheduler`/`backend_worker`
+#     (which now owns `retention`, passed through as block_retention).
+# The 3.x chart wires these up from the values below. There is NO supported
+# downgrade path from Tempo 3.x back to 2.x (the on-disk block/live-store
+# formats and config keys changed), so treat 3.0.0 as a one-way pin.
+# ---------------------------------------------------------------------------
+
+# Single replica: local/kind, no HA. Local storage means exactly one writer.
+replicas: 1
+
+tempo:
+  # Keep 24h of traces; rendered into
+  # backend_scheduler.provider.compaction.compaction.block_retention.
+  retention: 24h
+
+  # OTLP receivers exposed on the fixed ports 4317 (gRPC) and 4318 (HTTP).
+  # (The chart also leaves the Jaeger receivers enabled; the Service port
+  # template reads them, so they are intentionally kept at their defaults.)
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+
+  # Local filesystem backend (no object storage locally): traces + WAL under
+  # the 5Gi persistent volume mounted at /var/tempo.
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  # Modest requests/limits for a local kind cluster.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+# 5Gi persistent volume for /var/tempo (traces + WAL).
+persistence:
+  enabled: true
+  size: 5Gi

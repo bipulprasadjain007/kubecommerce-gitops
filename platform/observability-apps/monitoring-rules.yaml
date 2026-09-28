@@ -1,0 +1,43 @@
+# Argo CD Application: KubeCommerce PrometheusRules (`platform/monitoring/rules`).
+#
+# Wave 1 within the `kubecommerce-platform-observability` app-of-apps. This
+# Application is what actually deploys the PrometheusRule CRs; without it
+# Prometheus has no KubeCommerce alert rules to evaluate.
+#
+# `SkipDryRunOnMissingResource=true` because the `monitoring.coreos.com/v1`
+# PrometheusRule CRD is installed by kube-prometheus-stack (wave 0); on the very
+# first sync the dry-run can run before the CRD is Established.
+#
+# Plain single-path source (no `$values` needed), same style as dashboards.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-rules
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: alerting
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/monitoring/rules
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+  revisionHistoryLimit: 3

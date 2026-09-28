@@ -1,0 +1,249 @@
+# KubeCommerce PrometheusRules (guide Phase 9, Step 9.5).
+#
+# Namespace `observability`; discovered by the kube-prometheus-stack Prometheus
+# because `prometheus.prometheusSpec.ruleSelector` / `ruleNamespaceSelector` are
+# open ({} with *NilUsesHelmValues=false), so no selector label is required.
+#
+# Metric sources:
+#   kubecommerce_http_*                      - app RED metrics (libs/observability)
+#   kube_* / container_*                     - kube-state-metrics / cAdvisor
+#   rabbitmq_*                               - built-in rabbitmq_prometheus plugin
+#
+# Every alert carries a `severity` label (critical|warning) so the Alertmanager
+# route in platform/monitoring/kps-values.yaml can fan out per severity, plus
+# `description` and `runbook_url` annotations.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kubecommerce-api-rules
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: kubecommerce-api-rules
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/managed-by: argocd
+spec:
+  groups:
+    - name: kubecommerce.api.red
+      interval: 30s
+      rules:
+        # --- API 5xx ratio > 5% for 5m -------------------------------------
+        - alert: KubeCommerceApiHighErrorRate
+          expr: |
+            (
+              sum by (namespace, service) (rate(kubecommerce_http_requests_total{status=~"5.."}[5m]))
+              /
+              sum by (namespace, service) (rate(kubecommerce_http_requests_total[5m]))
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            component: api
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce {{ $labels.service }} 5xx error rate above 5%"
+            description: >-
+              {{ $labels.service }} in namespace {{ $labels.namespace }} has served
+              more than 5% 5xx responses over the last 5 minutes
+              (current ratio: {{ $value | humanizePercentage }}). Check the
+              KubeCommerce - API RED dashboard and the service logs.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#high-error-rate
+
+        # --- API p95 latency > 750ms for 10m --------------------------------
+        - alert: KubeCommerceApiHighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le, namespace, service) (
+                rate(kubecommerce_http_request_duration_seconds_bucket[5m])
+              )
+            ) > 0.75
+          for: 10m
+          labels:
+            severity: warning
+            component: api
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce {{ $labels.service }} p95 latency above 750ms"
+            description: >-
+              The p95 request latency for {{ $labels.service }} in namespace
+              {{ $labels.namespace }} has been above 750ms for 10 minutes
+              (current p95: {{ $value | humanizeDuration }}). Check downstream
+              dependencies and the trace waterfall in Tempo.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#high-latency
+
+        # --- Total API outage: all traffic failing with 5xx -----------------
+        #
+        # Semantics: fires only when a service is demonstrably serving real
+        # traffic AND every one of those requests is failing with a 5xx.
+        #   * `sum(...)` produces a value only for series that exist, so an idle
+        #     service (no kubecommerce_http_requests_total samples at all) yields
+        #     no series and cannot fire — this is why a bare `== 0` comparison is
+        #     not used (it would be absent, not zero, and never fire).
+        #   * `>= 0.1` req/s (~30 requests over the 5m rate window) is a minimum
+        #     volume floor so a single scrape/probe blip does not page anyone and
+        #     health probes returning 200 cannot mask a genuinely dead service.
+        #     If >=30 requests all returned 5xx, the numerator divides to exactly
+        #     1, which trips `> 0.99`.
+        #   * `and on (namespace, service)` requires the failing-rate series to
+        #     have a matching non-absent total-rate series. Since the numerator is
+        #     a subset re-aggregation of the denominator, this is effectively
+        #     always true, but it makes the intent explicit and guards against
+        #     label-set drift between the two aggregations.
+        # Kept as a distinct signal from KubeCommerceApiHighErrorRate: this is the
+        # "100% down" page, that one is the "elevated errors" warning.
+        - alert: KubeCommerceApiTotalFailure
+          expr: |
+            (
+              sum by (namespace, service) (rate(kubecommerce_http_requests_total{status=~"5.."}[5m]))
+              /
+              sum by (namespace, service) (rate(kubecommerce_http_requests_total[5m]))
+            ) > 0.99
+            and on (namespace, service)
+            sum by (namespace, service) (rate(kubecommerce_http_requests_total[5m])) >= 0.1
+          for: 5m
+          labels:
+            severity: critical
+            component: api
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce {{ $labels.service }} is returning 5xx for all traffic"
+            description: >-
+              {{ $labels.service }} in namespace {{ $labels.namespace }} has
+              served 100% 5xx responses ({{ $value | humanizePercentage }}) under
+              sustained traffic for 5 minutes. The service is effectively down.
+              Check the KubeCommerce - API RED dashboard, pod readiness and the
+              service logs.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#total-failure
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kubecommerce-platform-rules
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: kubecommerce-platform-rules
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/managed-by: argocd
+spec:
+  groups:
+    - name: kubecommerce.workloads
+      interval: 30s
+      rules:
+        # --- Pods restarting repeatedly (increase over 15m) -----------------
+        - alert: KubeCommercePodRestarting
+          expr: |
+            sum by (namespace, pod, container) (
+              increase(kube_pod_container_status_restarts_total{namespace=~"kubecommerce-.*"}[15m])
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+            component: workload
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce pod {{ $labels.pod }} is crash-looping"
+            description: >-
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              (namespace {{ $labels.namespace }}) restarted
+              {{ $value | humanize }} times in the last 15 minutes. Inspect
+              `kubectl describe pod` and the previous container logs.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#crash-loop
+
+        # --- Deployment has unavailable replicas ----------------------------
+        #
+        # Gated on `kube_deployment_spec_replicas > 0`: a deployment that is
+        # scaled to zero (or a brand-new deployment whose HPA has not filled
+        # replicas yet) reports unavailable > 0 transiently on first install, so
+        # requiring a desired replica count removes that startup noise. `for: 10m`
+        # gives a rolling update / first rollout time to converge before paging.
+        - alert: KubeCommerceDeploymentUnavailable
+          expr: |
+            (
+              kube_deployment_status_replicas_unavailable{namespace=~"kubecommerce-.*"} > 0
+            )
+            and on (namespace, deployment)
+            kube_deployment_spec_replicas{namespace=~"kubecommerce-.*"} > 0
+          for: 10m
+          labels:
+            severity: critical
+            component: workload
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce deployment {{ $labels.deployment }} has unavailable replicas"
+            description: >-
+              Deployment {{ $labels.deployment }} in namespace
+              {{ $labels.namespace }} has a desired replica count above zero and
+              has had {{ $value | humanize }} unavailable replica(s) for 10
+              minutes. Check rollout status, image pull errors and readiness
+              probes.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#unavailable-replicas
+
+        # --- Container memory working set near its limit --------------------
+        - alert: KubeCommerceContainerMemoryNearLimit
+          expr: |
+            (
+              sum by (namespace, pod, container) (
+                container_memory_working_set_bytes{namespace=~"kubecommerce-.*", container!="", image!=""}
+              )
+              /
+              sum by (namespace, pod, container) (
+                kube_pod_container_resource_limits{namespace=~"kubecommerce-.*", resource="memory", container!=""}
+              )
+            ) > 0.9
+          for: 10m
+          labels:
+            severity: warning
+            component: workload
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce {{ $labels.pod }} memory above 90% of limit"
+            description: >-
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              (namespace {{ $labels.namespace }}) is using
+              {{ $value | humanizePercentage }} of its memory limit for 10
+              minutes. Risk of OOMKill; review the limit or the workload leaks.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#memory-pressure
+
+        # --- HPA pinned at its maximum replica count ------------------------
+        - alert: KubeCommerceHpaAtMaxReplicas
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace=~"kubecommerce-.*"}
+            >=
+            kube_horizontalpodautoscaler_spec_max_replicas{namespace=~"kubecommerce-.*"}
+          for: 10m
+          labels:
+            severity: warning
+            component: autoscaling
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce HPA {{ $labels.horizontalpodautoscaler }} is at max replicas"
+            description: >-
+              HPA {{ $labels.horizontalpodautoscaler }} in namespace
+              {{ $labels.namespace }} has run at its maximum replica count for
+              10 minutes. The service is saturated; raise maxReplicas or reduce
+              its cost per request.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#hpa-at-max
+
+    - name: kubecommerce.messaging
+      interval: 30s
+      rules:
+        # --- Dead-letter queue is not empty ---------------------------------
+        - alert: KubeCommerceRabbitMQDLQNotEmpty
+          expr: |
+            sum by (namespace, queue) (rabbitmq_queue_messages{queue=~".*dlq"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+            component: messaging
+            team: kubecommerce
+          annotations:
+            summary: "KubeCommerce RabbitMQ DLQ {{ $labels.queue }} is not empty"
+            description: >-
+              RabbitMQ dead-letter queue {{ $labels.queue }} has held
+              {{ $value | humanize }} message(s) for 5 minutes. Inspect the
+              messages in the management UI and replay or discard them.
+            runbook_url: https://github.com/your-github-username/project-1/blob/main/docs/runbook.md#dlq-not-empty

@@ -1,0 +1,63 @@
+# Argo CD Application: Grafana Loki (log storage) for KubeCommerce.
+#
+# Release name is `loki` in namespace `observability`, which is the fixed
+# interface lane 1 (monitoring) and Grafana depend on:
+#   Service `loki.observability.svc.cluster.local`, port 3100 (HTTP `/loki/api/v1`).
+# Alloy pushes to http://loki.observability.svc.cluster.local:3100/loki/api/v1/push.
+#
+# Chart provenance (verified 2026-09-26 with `helm repo add` + `helm search`):
+#   The OSS Grafana charts moved out of `grafana/helm-charts`; `loki` 18.13.5
+#   (appVersion 3.7.8) is published by the community repo:
+#     https://grafana-community.github.io/helm-charts
+#   `grafana/loki` no longer carries the 18.x line.
+#
+# Multi-source `$values`: the first (git) source is checked out only to provide
+# the `$values` ref; the second source is the remote Helm chart and consumes
+# platform/logging/loki-values.yaml through that ref.
+#
+# NOTE (orchestrator): argocd/project.yaml `spec.sourceRepos` must include the
+# Helm chart repository URL(s) below, otherwise Argo CD rejects the source.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+  annotations:
+    # The logging stack is a wave-0 platform component; Alloy (wave 1) depends
+    # on this Service existing at runtime.
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: logging
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  sources:
+    # 1) Values-only source: checked out so `$values` can address a path that
+    #    lives outside the chart (`platform/logging/loki-values.yaml`).
+    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+      targetRevision: main
+      ref: values
+    # 2) Remote Helm chart, consuming the values via the `$values` ref.
+    - repoURL: https://grafana-community.github.io/helm-charts
+      chart: loki
+      targetRevision: 18.13.5
+      helm:
+        valueFiles:
+          - $values/platform/logging/loki-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      # Large CRDs/labels: server-side apply avoids the last-applied annotation
+      # size limit and gives deterministic field ownership.
+      - ServerSideApply=true
+      # First sync may happen before the CRDs referenced by optional chart
+      # resources (ServiceMonitor/PrometheusRule) are registered.
+      - SkipDryRunOnMissingResource=true

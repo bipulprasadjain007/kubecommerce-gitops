@@ -1,0 +1,293 @@
+# =============================================================================
+# kube-prometheus-stack 91.5.3 - KubeCommerce local/monitoring values.
+#
+# Consumed by the Argo CD Application in
+# `platform/observability-apps/kube-prometheus-stack.yaml` via the multi-source
+# `$values` ref pattern:
+#   helm.valueFiles: [$values/platform/monitoring/kps-values.yaml]
+#
+# Fixed interfaces (do not rename without updating the other Phase E lanes):
+#   release name ............ kube-prometheus-stack (namespace: monitoring)
+#   Prometheus service ...... kube-prometheus-stack-prometheus.monitoring:9090
+#   Alertmanager service .... kube-prometheus-stack-alertmanager.monitoring:9093
+#   Grafana datasource UIDs . prometheus | loki | tempo
+#   Alert sink .............. http://alert-sink.observability.svc.cluster.local:8080/alerts
+#
+# Design notes:
+#   * The three control-plane scrapers (etcd/controller-manager/scheduler) and
+#     kube-proxy are disabled: a local kind cluster does not expose them the way
+#     kube-prometheus-stack expects, and they are not KubeCommerce concerns.
+#   * kube-state-metrics and node-exporter stay enabled (workload + node health).
+#   * Every *Selector* is set to "{}" with the matching *NilUsesHelmValues=false
+#     so Prometheus discovers ServiceMonitors / PodMonitors / PrometheusRules and
+#     Alertmanager discovers AlertmanagerConfigs in ALL namespaces. An empty
+#     selector means "everything"; a null/omitted selector would mean
+#     "own namespace only" (or nothing for AlertmanagerConfig), which is why the
+#     flags are set explicitly and no selector is ever null.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Prometheus
+# -----------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    replicas: 1
+
+    # 6h / 5GiB is deliberately small for the local kind demo. retentionSize is a
+    # hard cap; Prometheus starts deleting old blocks as it approaches 5GiB.
+    retention: 6h
+    retentionSize: 5GiB
+    walCompression: true
+
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+
+    # --- Open selectors: discover every namespace's monitors/rules. -----------
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+
+    probeSelectorNilUsesHelmValues: false
+    probeSelector: {}
+    probeNamespaceSelector: {}
+
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+
+    scrapeConfigSelectorNilUsesHelmValues: false
+    scrapeConfigSelector: {}
+    scrapeConfigNamespaceSelector: {}
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+# -----------------------------------------------------------------------------
+# Alertmanager - single replica, routes by severity to the local alert sink.
+# -----------------------------------------------------------------------------
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 1
+
+    # Open selectors: merge AlertmanagerConfig resources from every namespace.
+    alertmanagerConfigSelector: {}
+    alertmanagerConfigNamespaceSelector: {}
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  # Alertmanager config (rendered to alertmanager.yaml by the chart). The route
+  # groups by [namespace, alertname, severity] and fans out per severity; every
+  # child route continues to the same local webhook receiver so a firing alert is
+  # delivered once per matching route. `send_resolved: true` lets the sink show
+  # the recovery in the Alerts UI / GET /alerts.
+  config:
+    global:
+      resolve_timeout: 5m
+    # Standard inhibition: a critical silences warning/info for the same
+    # namespace+alertname; a warning silences info. Matches the KubeCommerce
+    # severity labels emitted by platform/monitoring/rules/kubecommerce-alerts.yaml.
+    inhibit_rules:
+      - source_matchers:
+          - 'severity = critical'
+        target_matchers:
+          - 'severity =~ warning|info'
+        equal:
+          - namespace
+          - alertname
+      - source_matchers:
+          - 'severity = warning'
+        target_matchers:
+          - 'severity = info'
+        equal:
+          - namespace
+          - alertname
+    route:
+      receiver: local-webhook
+      group_by:
+        - namespace
+        - alertname
+        - severity
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        - receiver: local-webhook
+          matchers:
+            - severity = critical
+          group_wait: 10s
+          repeat_interval: 1h
+        - receiver: local-webhook
+          matchers:
+            - severity = warning
+          group_wait: 30s
+        - receiver: local-webhook
+          matchers:
+            - severity = info
+          group_wait: 1m
+          repeat_interval: 12h
+    receivers:
+      - name: local-webhook
+        webhook_configs:
+          - url: http://alert-sink.observability.svc.cluster.local:8080/alerts
+            send_resolved: true
+    templates:
+      - /etc/alertmanager/config/*.tmpl
+
+# -----------------------------------------------------------------------------
+# Grafana - sidecar-provisioned dashboards + datasources, pinned UIDs.
+# -----------------------------------------------------------------------------
+grafana:
+  enabled: true
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+
+  sidecar:
+    dashboards:
+      enabled: true
+      # Any ConfigMap with `grafana_dashboard: "1"` in ANY namespace is loaded.
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      # Honour `grafana_folder` on the ConfigMap so dashboards land in the
+      # "KubeCommerce" folder instead of General. foldersFromFilesStructure makes
+      # the sidecar recreate the same folder on every Grafana startup.
+      folderAnnotation: grafana_folder
+      provider:
+        allowUiUpdates: false
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      searchNamespace: ALL
+      label: grafana_datasource
+      labelValue: "1"
+      # The default Prometheus datasource is disabled here because Prometheus,
+      # Loki and Tempo are all declared explicitly in additionalDataSources
+      # below (single source of truth, pinned UIDs). Keeping the built-in
+      # Prometheus datasource would create a duplicate `prometheus` UID.
+      defaultDatasourceEnabled: false
+      # Keep the Alertmanager datasource (uid `alertmanager`), it is distinct.
+      alertmanager:
+        enabled: true
+        name: Alertmanager
+        uid: alertmanager
+        handleGrafanaManagedAlerts: false
+        implementation: prometheus
+
+  # Datasource URLs and UIDs are the Phase E fixed interface. These services are
+  # owned by lane 2 (loki/tempo) and must exist for the panels to return data.
+  additionalDataSources:
+    - name: Prometheus
+      type: prometheus
+      uid: prometheus
+      url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+      access: proxy
+      isDefault: true
+      editable: false
+      jsonData:
+        httpMethod: POST
+        timeInterval: 30s
+        # Link metric exemplars carrying `trace_id` to the Tempo datasource.
+        exemplarTraceIdDestinations:
+          - name: trace_id
+            datasourceUid: tempo
+    - name: Loki
+      type: loki
+      uid: loki
+      url: http://loki.observability.svc.cluster.local:3100
+      access: proxy
+      editable: false
+      jsonData:
+        maxLines: 1000
+        # Derived field: pull trace_id out of JSON log lines and jump to Tempo.
+        # Helm's `tpl` pass leaves `${__value.raw}` untouched (verified by
+        # `helm template`), so no `$`-escaping is needed here.
+        derivedFields:
+          - name: trace_id
+            matcherRegex: '"trace_id"\s*:\s*"([0-9a-fA-F]{32})"'
+            url: ${__value.raw}
+            datasourceUid: tempo
+            urlDisplayLabel: View trace in Tempo
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      url: http://tempo.observability.svc.cluster.local:3200
+      access: proxy
+      editable: false
+      jsonData:
+        # Cross-signal pivots required by guide Step 10.4.
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -1h
+          spanEndTimeShift: 1h
+          filterByTraceID: true
+          filterBySpanID: false
+          tags:
+            - key: service.name
+              value: service
+        tracesToMetrics:
+          datasourceUid: prometheus
+          spanStartTimeShift: -1h
+          spanEndTimeShift: 1h
+          tags:
+            - key: service.name
+              value: service
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+        lokiSearch:
+          datasourceUid: loki
+
+# -----------------------------------------------------------------------------
+# Control-plane scrapers - off (kind does not expose these consistently).
+# -----------------------------------------------------------------------------
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# Workload + node metrics - kept on (guide Step 9.1).
+# -----------------------------------------------------------------------------
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# Operator - modest resources so the whole stack fits a local kind cluster.
+# -----------------------------------------------------------------------------
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

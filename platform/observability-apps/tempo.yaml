@@ -1,0 +1,57 @@
+# Argo CD Application: Grafana Tempo (distributed traces) for KubeCommerce.
+#
+# Release name is `tempo` in namespace `observability`, which is the fixed
+# interface lane 1 (monitoring/Grafana) depends on:
+#   Service `tempo.observability.svc.cluster.local`
+#     - 3200  HTTP API / query (Grafana datasource + `/ready`)
+#     - 4317  OTLP gRPC receiver
+#     - 4318  OTLP HTTP receiver
+# The OpenTelemetry Collector exports traces to tempo.observability...:4317.
+#
+# Chart provenance (verified 2026-09-26 with `helm repo add` + `helm search`):
+#   Tempo 3.0.0 (appVersion 3.0.3) is published by the community repo:
+#     https://grafana-community.github.io/helm-charts
+#   `grafana/tempo` still publishes the 1.x/2.x line (chart 1.24.x, Tempo 2.x);
+#   the 3.x chart line lives in the community repo.
+#
+# Multi-source `$values`: git source provides the `$values` ref; the Helm source
+# consumes platform/tracing/tempo-values.yaml.
+#
+# NOTE (orchestrator): argocd/project.yaml `spec.sourceRepos` must include the
+# Helm chart repository URL(s) below, otherwise Argo CD rejects the source.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tempo
+  namespace: argocd
+  annotations:
+    # Tempo is a wave-0 platform component; OTel Collector (wave 1) targets it.
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: tracing
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  sources:
+    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://grafana-community.github.io/helm-charts
+      chart: tempo
+      targetRevision: 3.0.0
+      helm:
+        valueFiles:
+          - $values/platform/tracing/tempo-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

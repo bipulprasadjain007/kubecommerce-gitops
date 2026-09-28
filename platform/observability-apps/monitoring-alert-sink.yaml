@@ -1,0 +1,43 @@
+# Argo CD Application: the local Alertmanager webhook receiver (`alert-sink`).
+#
+# Wave 1 within the `kubecommerce-platform-observability` app-of-apps. This
+# Application is what actually deploys platform/monitoring/alert-sink; without it
+# the Alertmanager receiver URL
+#   http://alert-sink.observability.svc.cluster.local:8080/alerts
+# resolves to nothing and every notification is dropped.
+#
+# Plain single-path source (no `$values` needed), same style as dashboards.yaml.
+# The path is explicit (not a directory glob) so future sibling directories under
+# platform/monitoring are never pulled in unintentionally.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-alert-sink
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: alerting
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/monitoring/alert-sink
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+  revisionHistoryLimit: 3

@@ -1,0 +1,63 @@
+# Argo CD Application: OpenTelemetry Collector (OTLP gateway) for KubeCommerce.
+#
+# Release name is `otel-collector` in namespace `observability`, deployed as a
+# single-replica Deployment. The apps send OTLP/HTTP to:
+#   http://otel-collector.observability.svc.cluster.local:4318
+# and the collector exports traces to Tempo:
+#   tempo.observability.svc.cluster.local:4317 (gRPC, insecure).
+#
+# Fixed label contract (the app chart's NetworkPolicy egress peer matches on
+# namespace `observability` + pod label `app.kubernetes.io/name: otel-collector`,
+# port 4318):
+#   `nameOverride: otel-collector` makes the chart's selector/common labels use
+#   `app.kubernetes.io/name: otel-collector` (instead of the chart name
+#   `opentelemetry-collector`) and keeps the Service name `otel-collector`.
+#   `podLabels`/`additionalLabels` add `app.kubernetes.io/part-of: kubecommerce`.
+#
+# Chart provenance (verified 2026-09-26 with `helm repo add` + `helm search`):
+#   OpenTelemetry Collector 0.173.1 (appVersion 0.160.0) is published by:
+#     https://open-telemetry.github.io/opentelemetry-helm-charts
+#   This chart version requires an explicit `image.repository` +
+#   `command.name` (the chart default image repository is empty).
+#
+# Multi-source `$values`: git source provides the `$values` ref; the Helm source
+# consumes platform/observability/otel-collector-values.yaml.
+#
+# NOTE (orchestrator): argocd/project.yaml `spec.sourceRepos` must include the
+# Helm chart repository URL below, otherwise Argo CD rejects the source.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: otel-collector
+  namespace: argocd
+  annotations:
+    # Wave 1: after Tempo (wave 0), its trace exporter target.
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: tracing
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  sources:
+    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+      targetRevision: main
+      ref: values
+    - repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
+      chart: opentelemetry-collector
+      targetRevision: 0.173.1
+      helm:
+        valueFiles:
+          - $values/platform/observability/otel-collector-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

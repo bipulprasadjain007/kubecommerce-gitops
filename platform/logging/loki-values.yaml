@@ -1,0 +1,111 @@
+# Helm values for Grafana Loki - KubeCommerce logging stack (local/kind).
+#
+# Chart: loki 18.13.5 (appVersion 3.7.8)
+# Repo : https://grafana-community.github.io/helm-charts
+# Consumed by: platform/observability-apps/loki.yaml (Argo multi-source $values).
+#
+# ---------------------------------------------------------------------------
+# SERVICE / DNS CONTRACT (fixed interface, owned by lane 1 monitoring + apps)
+# ---------------------------------------------------------------------------
+# Release name `loki` + namespace `observability` renders:
+#   Service : loki.observability.svc.cluster.local
+#   Port    : 3100 (http-metrics) -> container 3100, Loki HTTP API
+#   Push    : http://loki.observability.svc.cluster.local:3100/loki/api/v1/push
+#   Query   : http://loki.observability.svc.cluster.local:3100/loki/api/v1/query_range
+# Alloy (platform/logging/alloy-values.yaml) pushes to that exact URL; the Grafana
+# datasource (lane 1) points at that exact URL. Do NOT rename the release or
+# change the Service/port without coordinating both lanes.
+#
+# The chart's nginx `gateway` is disabled: the contract is the direct `loki`
+# Service on 3100, and local installs do not need the nginx multi-tenant proxy.
+# minio is disabled (the subchart is deprecated/broken locally); chunks and the
+# index live on a 5Gi filesystem volume.
+# ---------------------------------------------------------------------------
+
+# Monolithic single-binary mode: one Loki process running all targets. Suitable
+# for local/dev up to a few tens of GB/day.
+deploymentMode: Monolithic
+
+loki:
+  # Single-tenant local install: no X-Scope-OrgID required on push/query.
+  auth_enabled: false
+
+  # Single binary => one replica => replication factor 1 (must not be 3, the
+  # chart's default, or writes fail waiting for a quorum of one).
+  commonConfig:
+    replication_factor: 1
+
+  # Filesystem (no object store / MinIO) storage for chunks and ruler data.
+  storage:
+    type: filesystem
+    filesystem:
+      chunks_directory: /var/loki/chunks
+      rules_directory: /var/loki/rules
+
+  # Schema v13 TSDB index, effective from 2024-01-01, daily index periods.
+  schemaConfig:
+    configs:
+      - from: 2024-01-01
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  # Bound on-disk growth for the 5Gi volume: keep 7 days of logs.
+  limits_config:
+    retention_period: 168h
+  compactor:
+    retention_enabled: true
+    # Loki 3.x requires an explicit delete request store for retention.
+    delete_request_store: filesystem
+
+# Single binary workload: exactly one replica with a 5Gi persistent volume.
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 5Gi
+  # Modest requests/limits for a local kind cluster.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Simple-scalable targets must be disabled in Monolithic mode: the chart ships
+# read/write/backend enabled with replicas: 3 for the SSD default, and the
+# validate template fails if both monolithic and scalable targets are non-zero.
+write:
+  enabled: false
+  replicas: 0
+read:
+  enabled: false
+  replicas: 0
+backend:
+  enabled: false
+  replicas: 0
+
+# The nginx gateway is not part of the fixed Service/DNS contract.
+gateway:
+  enabled: false
+
+# Local install: skip the memcached result/chunk caches to keep the footprint
+# small. Loki works without them (slightly more disk/latency under load).
+resultsCache:
+  enabled: false
+chunksCache:
+  enabled: false
+
+# No object storage subchart on the local path.
+minio:
+  enabled: false
+
+# Helm test pods and the log-generating canary are not needed here.
+test:
+  enabled: false
+lokiCanary:
+  enabled: false

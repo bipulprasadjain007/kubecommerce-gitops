@@ -1,0 +1,82 @@
+# Helm values: prometheus-postgres-exporter - KubeCommerce (local/kind).
+#
+# Chart : prometheus-postgres-exporter 8.2.0 (appVersion v0.20.1)
+# Repo  : https://prometheus-community.github.io/helm-charts
+# Used  : platform/observability-apps/postgres-exporter.yaml
+#         (Argo CD multi-source `$values` ref; release name `postgres-exporter`).
+#
+# ---------------------------------------------------------------------------
+# WHAT IT SCRAPES
+# ---------------------------------------------------------------------------
+# The shared PostgreSQL StatefulSet from platform/infrastructure/postgres, via
+# the `postgres` Service in `platform-system`:
+#   postgres.platform-system.svc.cluster.local:5432
+# It connects as the `kubecommerce` role to the `postgres` maintenance database
+# and exposes :9187 /metrics. The chart's default-enabled collectors provide the
+# families dashboard C references:
+#   * stat_activity  -> pg_stat_activity_count            (label: datname)
+#   * settings       -> pg_settings_max_connections
+#   * stat_database  -> pg_stat_database_*                (per-database counters)
+# See platform/exporters/README.md for the full family list.
+#
+# ---------------------------------------------------------------------------
+# CREDENTIALS (never inline the password in Git)
+# ---------------------------------------------------------------------------
+# Mechanism: the chart's `config.datasourceSecret` renders a single env var
+#   DATA_SOURCE_NAME <- secretKeyRef { name, key }
+# i.e. the complete connection string is stored in an existing Secret and read
+# at pod start. Do NOT use `config.datasource.password` / `passwordSecret`:
+# those build the URI from a bare password and still need user/host/db values.
+#
+# Secret (namespace `observability`), created out-of-band by
+# scripts/k8s-dev-secrets.sh (`make k8s-secrets`):
+#   name: postgres-exporter-secret
+#   key : DATA_SOURCE_NAME
+#   value:
+#     postgresql://kubecommerce:<postgres-password>@postgres.platform-system.svc.cluster.local:5432/postgres?sslmode=disable
+# `<postgres-password>` is the generated `postgres-password` key of
+# platform-system/kubecommerce-infra-secrets (see platform/infrastructure/README.md).
+#
+# ---------------------------------------------------------------------------
+# SCRAPE CONTRACT (fixed interface, owned by lane 1 monitoring)
+# ---------------------------------------------------------------------------
+# kube-prometheus-stack uses OPEN ServiceMonitor selectors
+# (serviceMonitorSelector: {} + serviceMonitorSelectorNilUsesHelmValues: false,
+# see platform/monitoring/kps-values.yaml), so NO `release` label is required.
+# Rendered ServiceMonitor (namespace `observability`):
+#   name : postgres-exporter
+#   port : http (:9187)   path: /metrics   interval: 30s
+# Service : postgres-exporter.observability.svc.cluster.local:80 -> :9187
+
+# Stable resource names regardless of the Argo release name.
+fullnameOverride: postgres-exporter
+
+# Open ServiceMonitor selector (KPS values above): no `release` label needed.
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
+# Connection string from the existing Secret (see header).
+config:
+  datasourceSecret:
+    name: postgres-exporter-secret
+    key: DATA_SOURCE_NAME
+  # stat_activity + settings collectors stay enabled (chart defaults) because
+  # dashboard C uses pg_stat_activity_count / pg_settings_max_connections.
+  disableDefaultMetrics: false
+  disableSettingsMetrics: false
+
+# Modest footprint for the local single-instance demo.
+resources:
+  requests:
+    cpu: 20m
+    memory: 48Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+# No cluster-wide RBAC/API access is needed by the exporter.
+rbac:
+  create: false
+serviceAccount:
+  create: false

@@ -1,0 +1,42 @@
+# Argo CD Application: KubeCommerce Grafana dashboard ConfigMaps.
+#
+# Wave 1 within the `kubecommerce-platform-observability` app-of-apps: applied
+# after kube-prometheus-stack (wave 0) so the Grafana dashboard sidecar exists and
+# picks the ConfigMaps up. The ConfigMaps live in `observability` (not
+# `monitoring`) because the sidecar searches all namespaces; keeping them next to
+# the rest of the observability lane avoids coupling to the Grafana release.
+#
+# Each file under platform/monitoring/dashboards is a Kubernetes ConfigMap in
+# JSON syntax whose data key is the dashboard JSON, labelled
+# `grafana_dashboard: "1"` and annotated `grafana_folder: KubeCommerce`.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-monitoring-dashboards
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: dashboards
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/monitoring/dashboards
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+  revisionHistoryLimit: 3

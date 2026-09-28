@@ -1,0 +1,75 @@
+# Helm values: prometheus-redis-exporter - KubeCommerce (local/kind).
+#
+# Chart : prometheus-redis-exporter 6.31.1 (appVersion v1.91.1)
+# Repo  : https://prometheus-community.github.io/helm-charts
+# Used  : platform/observability-apps/redis-exporter.yaml
+#         (Argo CD multi-source `$values` ref; release name `redis-exporter`).
+#
+# ---------------------------------------------------------------------------
+# WHAT IT SCRAPES
+# ---------------------------------------------------------------------------
+# The shared Redis StatefulSet from platform/infrastructure/redis, via the
+# `redis` Service in `platform-system`:
+#   redis.platform-system.svc.cluster.local:6379
+# It authenticates with the Redis password and exposes :9121 /metrics. The
+# exporter reports every Redis INFO section, including the families dashboard C
+# references:
+#   * redis_keyspace_hits_total
+#   * redis_keyspace_misses_total
+#   * redis_commands_processed_total
+# See platform/exporters/README.md for the full family list.
+#
+# ---------------------------------------------------------------------------
+# CREDENTIALS (never inline the password in Git)
+# ---------------------------------------------------------------------------
+# Mechanism: the chart's native `auth` block. With `auth.secret.name` + `.key`
+# set, the deployment renders
+#   REDIS_PASSWORD <- secretKeyRef { name, key }
+# (`redisPassword` is ignored once `auth.secret.name` is set).
+#
+# Secret (namespace `observability`), created out-of-band by
+# scripts/k8s-dev-secrets.sh (`make k8s-secrets`):
+#   name: redis-exporter-secret
+#   key : redis-password
+#   value: the generated `redis-password` of
+#          platform-system/kubecommerce-infra-secrets
+#          (see platform/infrastructure/README.md).
+#
+# ---------------------------------------------------------------------------
+# SCRAPE CONTRACT (fixed interface, owned by lane 1 monitoring)
+# ---------------------------------------------------------------------------
+# kube-prometheus-stack uses OPEN ServiceMonitor selectors
+# (serviceMonitorSelector: {} + serviceMonitorSelectorNilUsesHelmValues: false,
+# see platform/monitoring/kps-values.yaml), so NO `release` label is required.
+# Rendered ServiceMonitor (namespace `observability`):
+#   name : redis-exporter
+#   port : redis-exporter (:9121)   path: /metrics   interval: 30s
+# Service : redis-exporter.observability.svc.cluster.local:9121
+
+# Stable resource names regardless of the Argo release name.
+fullnameOverride: redis-exporter
+
+# Open ServiceMonitor selector (KPS values above): no `release` label needed.
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
+# Target address (fixed DNS interface from platform/infrastructure/README.md).
+# The password is NOT part of this URL; it comes from auth.secret below.
+redisAddress: redis://redis.platform-system.svc.cluster.local:6379
+
+# Password from the existing Secret (see header).
+auth:
+  enabled: true
+  secret:
+    name: redis-exporter-secret
+    key: redis-password
+
+# Modest footprint for the local single-instance demo.
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi

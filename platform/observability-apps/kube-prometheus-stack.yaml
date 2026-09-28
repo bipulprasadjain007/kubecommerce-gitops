@@ -1,0 +1,70 @@
+# Argo CD Application: kube-prometheus-stack (Prometheus Operator, Prometheus,
+# Alertmanager, Grafana, kube-state-metrics, node-exporter).
+#
+# Wave 0 within the `kubecommerce-platform-observability` app-of-apps
+# (argocd/platform-apps/platform-observability.yaml): the stack installs the
+# Prometheus Operator CRDs first, then dashboards (wave 1) and the app
+# ServiceMonitors/PrometheusRules (wave 2, owned by the environment apps).
+#
+# Multi-source pattern: the first source is a values-only checkout of this repo
+# so the chart source can reference `$values/platform/monitoring/kps-values.yaml`
+# (Argo CD's documented "multiple sources" ref pattern; the same style is used in
+# argocd/applicationset.yaml).
+#
+# NOTE (required out-of-band change, owner: Argo CD bootstrap lane):
+#   AppProject `kubecommerce` (argocd/project.yaml) must whitelist the Helm
+#   repository `https://prometheus-community.github.io/helm-charts` in
+#   spec.sourceRepos, and the observability resource kinds (Prometheus,
+#   Alertmanager, Grafana, ...) plus ClusterRole/Binding and webhook
+#   configurations in the namespace/cluster allow-lists. Without the sourceRepo
+#   entry Argo CD refuses to sync this Application. See platform/monitoring/README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: monitoring
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  sources:
+    # 1) Values-only source: checked out so `$values` can address a path that
+    #    lives outside the Helm chart directory.
+    - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+      targetRevision: main
+      ref: values
+    # 2) Upstream chart source, consuming the values file via the $values ref.
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 91.5.3
+      helm:
+        releaseName: kube-prometheus-stack
+        valueFiles:
+          - $values/platform/monitoring/kps-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Namespaces are created by platform/namespaces/namespaces.yaml (wave -5).
+      - CreateNamespace=false
+      # Large manifests / CRDs and deterministic field ownership.
+      - ServerSideApply=true
+      # The monitoring CRDs may not be Established on the first pass; accept the
+      # missing CRD during dry-run and let Argo retry until they exist.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 3

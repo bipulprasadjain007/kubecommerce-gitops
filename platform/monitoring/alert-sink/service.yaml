@@ -1,0 +1,22 @@
+# Alert sink Service. The name MUST stay exactly `alert-sink` in namespace
+# `observability` so Alertmanager's webhook receiver resolves
+#   http://alert-sink.observability.svc.cluster.local:8080/alerts
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-sink
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: alert-sink
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: alert-sink
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
