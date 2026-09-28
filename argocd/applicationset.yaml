@@ -1,0 +1,92 @@
+# Argo CD ApplicationSet: one Application per environment (guide Phase 8, Step 8.2).
+#
+# A list generator over dev/staging/prod produces:
+#   kubecommerce-dev      -> namespace kubecommerce-dev
+#   kubecommerce-staging  -> namespace kubecommerce-staging
+#   kubecommerce-prod     -> namespace kubecommerce-prod
+#
+# Each Application chart source is lane 2's values-driven chart at
+# `charts/kubecommerce`. Environment values live OUTSIDE that directory in
+# `environments/<env>/values.yaml`, so the documented Argo CD "multiple sources"
+# pattern is used: the first source is checked out only to provide the `$values`
+# ref, and the chart source references `$values/environments/<env>/values.yaml`.
+#
+# `goTemplate: true` is required because the per-environment automated-sync
+# policy is a non-string (object) field. Argo CD cannot template object fields
+# inside spec.template, so the variance is injected with `spec.templatePatch`
+# (a merge patch) below instead.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: kubecommerce-environments
+  namespace: argocd
+  annotations:
+    # Created after the platform child Applications (waves -5 and -4).
+    argocd.argoproj.io/sync-wave: "5"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  goTemplate: true
+  # Fail loudly on a typo'd parameter instead of emitting "<no value>".
+  goTemplateOptions:
+    - missingkey=error
+  generators:
+    - list:
+        elements:
+          - env: dev
+          - env: staging
+          - env: prod
+  template:
+    metadata:
+      name: kubecommerce-{{ .env }}
+      labels:
+        app.kubernetes.io/part-of: kubecommerce
+        environment: "{{ .env }}"
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: kubecommerce
+      sources:
+        # 1) Values-only source: checked out so `$values` can address paths that
+        #    live outside the chart directory.
+        - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+          targetRevision: main
+          ref: values
+        # 2) Chart source, consuming the env values via the $values ref.
+        - repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+          targetRevision: main
+          path: charts/kubecommerce
+          helm:
+            valueFiles:
+              - $values/environments/{{ .env }}/values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: kubecommerce-{{ .env }}
+      syncPolicy:
+        syncOptions:
+          # Namespaces are pre-created by platform/namespaces/namespaces.yaml, so
+          # the Application must not try to own them.
+          - CreateNamespace=false
+          # Server-side apply avoids the 262144-byte last-applied annotation limit
+          # (CRDs/large manifests) and gives deterministic field ownership.
+          - ServerSideApply=true
+          # The EnvoyProxy CR (gateway.envoyproxy.io) may not exist yet at first
+          # sync, so accept it missing during the dry-run instead of failing.
+          - SkipDryRunOnMissingResource=true
+      revisionHistoryLimit: 3
+  # Merge-patch the one non-string, per-environment field: automated sync.
+  #   dev     -> automated, prune + selfHeal (fast feedback, drift correction)
+  #   staging -> automated, prune only (no selfHeal: manual drift fixing is fine)
+  #   prod    -> NO automated block = manual sync (audited, approval-gated)
+  # The patch is merged onto the template above, so syncOptions is preserved and
+  # prod simply never gets an `automated` key.
+  templatePatch: |
+    {{- if ne .env "prod" }}
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: {{ eq .env "dev" }}
+    {{- end }}

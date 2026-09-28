@@ -1,0 +1,29 @@
+# EnvoyProxy tuning for the shared KubeCommerce Gateway.
+#
+# On kind, Envoy Gateway normally provisions a LoadBalancer Service for the
+# Gateway, which stays `<pending>` because there is no cloud provider. A
+# parallel lane maps kind host port 80 -> container port 30080 via
+# extraPortMappings, so this EnvoyProxy switches the generated data-plane
+# Service to NodePort and pins nodePort 30080. Requests to http://localhost/
+# then reach the Gateway without needing cloud-provider-kind.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: kubecommerce-proxy
+  namespace: platform-system
+  annotations:
+    # Default wave: applied alongside the Gateway in the same sync.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: NodePort
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              ports:
+                - port: 80
+                  nodePort: 30080

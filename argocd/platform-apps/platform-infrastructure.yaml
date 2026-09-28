@@ -1,0 +1,40 @@
+# Platform child Application: in-cluster shared infrastructure (guide section 1:
+# PostgreSQL, Redis, RabbitMQ) for the local kind environment.
+#
+# This is a nested app-of-apps: it applies the three child Applications in
+# platform/infrastructure/apps (each sync-wave -1), which in turn deploy the
+# StatefulSets/Services/ConfigMaps under platform/infrastructure/<component>.
+#
+# On EKS, staging/prod replace these with managed services (RDS/ElastiCache/
+# AmazonMQ) by disabling the child Applications and pointing the environment
+# values at managed endpoints; see platform/infrastructure/README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-infrastructure
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/infrastructure/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platform-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

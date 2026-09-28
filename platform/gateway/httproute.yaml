@@ -1,0 +1,92 @@
+# HTTPRoutes: one per environment namespace (guide Phase 4, Step 4.10).
+#
+# These are the single north-south entry routes. Each routes all traffic on "/"
+# to the `gateway-api` Service in the SAME namespace (port 80 -> container 8000).
+# The gateway-api service is the only public component (docs/architecture.md §6);
+# everything else stays ClusterIP-only.
+#
+# NOTE: the lane-2 Helm chart may optionally emit per-service HTTPRoutes. If it
+# does, it must be disabled for the north-south edge so these platform routes
+# remain the single source of truth (avoid two routes claiming the same host+path).
+#
+# ReferenceGrant: NOT required here and therefore not created.
+#   - parentRef (HTTPRoute -> Gateway in platform-system) is cross-namespace, but
+#     Gateway API authorises it via the Gateway listener's allowedRoutes, not via
+#     ReferenceGrant.
+#   - each backendRef (`gateway-api`) lives in the SAME namespace as its route, so
+#     no cross-namespace backend reference exists.
+#   Add a ReferenceGrant only if a backendRef is ever pointed at a Service in a
+#   different namespace.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gateway-api
+  namespace: kubecommerce-dev
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    environment: dev
+spec:
+  parentRefs:
+    - name: kubecommerce-gateway
+      namespace: platform-system
+      sectionName: http
+  # Uncomment together with the Gateway listener hostname to pin the host:
+  # hostnames:
+  #   - kubecommerce.local
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: gateway-api
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gateway-api
+  namespace: kubecommerce-staging
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    environment: staging
+spec:
+  parentRefs:
+    - name: kubecommerce-gateway
+      namespace: platform-system
+      sectionName: http
+  # hostnames:
+  #   - kubecommerce.local
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: gateway-api
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gateway-api
+  namespace: kubecommerce-prod
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    environment: prod
+spec:
+  parentRefs:
+    - name: kubecommerce-gateway
+      namespace: platform-system
+      sectionName: http
+  # hostnames:
+  #   - kubecommerce.local
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: gateway-api
+          port: 80

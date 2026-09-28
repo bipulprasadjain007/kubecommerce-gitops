@@ -1,0 +1,39 @@
+# Platform child Application: namespaces (guide Phase 4, Step 4.2).
+#
+# Created by the root app-of-apps (argocd/root-app.yaml, directory recurse) at
+# sync-wave -5, i.e. after the AppProject (wave -10) and before the Gateway and
+# infrastructure Applications (wave -4) and the per-environment ApplicationSet
+# (wave 5).
+#
+# Pruning is intentionally disabled: deleting a namespace would destroy
+# application data. Sync waves only order creation; they do not create namespaces
+# ignored by `CreateNamespace=false`.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-namespaces
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    # Replace the placeholder with the real GitOps repository URL (see
+    # bootstrap/argocd/README.md).
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/namespaces
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platform-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

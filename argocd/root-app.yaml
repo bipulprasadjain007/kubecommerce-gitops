@@ -1,0 +1,48 @@
+# App-of-apps bootstrap Application (guide Phase 8, Step 8.2).
+#
+# Bootstrap order (see bootstrap/argocd/README.md):
+#   1. install.sh installs Argo CD (Helm); the seven namespaces are then applied
+#      by this root app (platform/namespaces via the wave -5 child Application).
+#   2. `helm upgrade --install argocd ...` leaves Argo CD running, no apps yet.
+#   3. `install.sh --with-root-app` applies THIS file with kubectl. Argo CD then
+#      reconciles the `argocd/` directory (recurse): the restricted AppProject
+#      (wave -10), the platform child Applications (waves -5/-4: namespaces,
+#      Gateway API routing, in-cluster infrastructure) and finally the
+#      ApplicationSet (wave 5) that materialises the per-environment
+#      Applications.
+#
+# This Application deliberately uses the built-in `default` project: it must be
+# able to create the `kubecommerce` AppProject, which does not exist until the
+# first sync completes. After that, every generated Application uses the
+# restricted `kubecommerce` project.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-root
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # Replace the placeholder with the real GitOps repository URL (see README).
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: argocd
+    directory:
+      recurse: true
+      # Do not let the root Application manage itself. This file is applied once
+      # during bootstrap; the project + ApplicationSet are reconciled from Git.
+      exclude: root-app.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

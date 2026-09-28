@@ -1,0 +1,46 @@
+# North-south Gateway for KubeCommerce (guide Phase 4, Step 4.10).
+#
+# One Gateway is shared by all three environment namespaces. HTTPRoutes in
+# kubecommerce-dev|staging|prod attach to it cross-namespace; that is permitted
+# by `allowedRoutes.namespaces.from: All` (no ReferenceGrant is needed for a
+# route -> Gateway parentRef; see httproute.yaml).
+#
+# Kind / local access (host port 80):
+#   This Gateway does NOT rely on a cloud LoadBalancer. Via `infrastructure.
+#   parametersRef` below it selects the EnvoyProxy `kubecommerce-proxy`
+#   (envoyproxy.yaml), which makes Envoy Gateway expose its data plane as a
+#   NodePort Service on port 80 with nodePort 30080. The kind cluster maps host
+#   :80 -> node port 30080 via extraPortMappings (scripts/kind-up.sh), so
+#   http://localhost/ reaches this listener. No cloud-provider-kind / LoadBalancer
+#   shim is required. The listener hostname is intentionally omitted so ANY Host
+#   header matches, which keeps `curl http://localhost/...` working.
+#
+#   To also use the friendly name `kubecommerce.local`:
+#     1. add `127.0.0.1 kubecommerce.local` to /etc/hosts;
+#     2. uncomment `hostname: kubecommerce.local` below;
+#     3. uncomment the matching `hostnames:` list on each HTTPRoute.
+#   With the hostname omitted, /etc/hosts mapping is optional.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: kubecommerce-gateway
+  namespace: platform-system
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  gatewayClassName: envoy-gateway
+  # Use the EnvoyProxy CR to switch the generated data-plane Service to
+  # NodePort (30080) so kind's host :80 -> container :30080 mapping works.
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: kubecommerce-proxy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # hostname: kubecommerce.local
+      allowedRoutes:
+        namespaces:
+          from: All

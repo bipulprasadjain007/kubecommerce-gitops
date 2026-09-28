@@ -1,0 +1,15 @@
+# GatewayClass backed by Envoy Gateway (guide Phase 4, Step 4.10).
+#
+# Envoy Gateway is the local Gateway API implementation installed by the kind
+# bootstrap (lane D1). The controllerName is a well-known, stable identifier.
+# This is a cluster-scoped resource, so the Argo CD AppProject whitelists
+# `GatewayClass` explicitly (it is one of the few cluster-scoped kinds allowed).
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy-gateway
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  description: KubeCommerce north-south gateway (Envoy Gateway)

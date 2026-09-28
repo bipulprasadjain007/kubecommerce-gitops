@@ -1,0 +1,35 @@
+# Platform child Application: Gateway API routing (guide Phase 4, Step 4.10).
+#
+# Sync-wave -4: after namespaces (-5), before the per-environment Applications
+# (ApplicationSet, wave 5). Owns the Envoy Gateway GatewayClass, the shared
+# Gateway in platform-system and the per-environment HTTPRoutes.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/gateway
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platform-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      # The EnvoyProxy CR (gateway.envoyproxy.io) may not be registered yet at
+      # first sync; don't fail the dry-run when the kind is still missing.
+      - SkipDryRunOnMissingResource=true

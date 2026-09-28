@@ -1,0 +1,43 @@
+# Platform child Application: observability stack (guide Phases 9-10).
+#
+# Nested app-of-apps: applies the component Applications in
+# platform/observability-apps (kube-prometheus-stack, dashboards, loki, alloy,
+# tempo, otel-collector). Sync-wave -3: after namespaces (-5) and alongside the
+# gateway/infrastructure (-4), before the per-environment Applications
+# (ApplicationSet, wave 5) whose ServiceMonitors/PrometheusRules are consumed by
+# this stack.
+#
+# Ordering note: the app chart re-enables ServiceMonitor resources for all
+# environments in Phase E. On the very first root sync the monitoring CRDs may
+# not be Established yet; the env Applications use
+# SkipDryRunOnMissingResource=true and Argo retries until the CRDs exist.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-observability
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/your-github-username/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/observability-apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

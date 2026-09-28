@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# LOCAL-ONLY Argo CD Helm values (kind / single-node).
+#
+# NOT for production: one replica of every component, no HA, no Dex, no
+# notifications, and the API server is served over plain HTTP. EKS/prod values
+# would add HA, TLS, SSO and the notifications controller elsewhere.
+#
+# Install (see install.sh):
+#   helm upgrade --install argocd argo/argo-cd \
+#     --version 10.9.2 -n argocd --create-namespace -f values.yaml --wait
+#
+# Chart pin source (verified 2026-09-26 via `helm search repo argo/argo-cd
+# --versions`): argo/argo-cd 10.9.2, which ships Argo CD app v3.5.3.
+# Re-verify with: helm search repo argo/argo-cd --versions | head
+# ---------------------------------------------------------------------------
+
+# No bundled Dex: local clusters use the built-in admin user only.
+dex:
+  enabled: false
+
+# No notification controller/templates needed for the portfolio demo.
+notifications:
+  enabled: false
+
+# Single-node sizing. Requests are set so the scheduler accounts for the
+# control plane; limits are modest because kind has no real capacity pressure.
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+server:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+repoServer:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+applicationSet:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+redis:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+configs:
+  params:
+    # Serve the API/UI over plain HTTP. This lets `kubectl port-forward
+    # svc/argocd-server -n argocd 8080:80` work with `--plaintext`, avoiding the
+    # self-signed cert dance. Local only: a real install enables TLS + SSO.
+    server.insecure: true
