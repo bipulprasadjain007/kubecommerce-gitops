@@ -1,0 +1,212 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: v3.22.0
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  ACTIONLINT_VERSION: v1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+jobs:
+  helm-validate:
+    name: helm-validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: helm lint (dev, staging, prod)
+        run: |
+          set -euo pipefail
+          for env in dev staging prod; do
+            echo "::group::helm lint ${env}"
+            helm lint charts/kubecommerce --strict -f "environments/${env}/values.yaml"
+            echo "::endgroup::"
+          done
+
+      - name: helm template | kubeconform (dev, staging, prod)
+        run: |
+          set -euo pipefail
+          for env in dev staging prod; do
+            echo "::group::helm template ${env}"
+            helm template kubecommerce charts/kubecommerce \
+              -n "kubecommerce-${env}" \
+              -f "environments/${env}/values.yaml" \
+              | kubeconform -strict -summary -ignore-missing-schemas
+            echo "::endgroup::"
+          done
+
+  manifest-validate:
+    name: manifest-validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: kubeconform argocd and platform manifests
+        run: |
+          set -euo pipefail
+          kubeconform -strict -summary -ignore-missing-schemas \
+            argocd/ \
+            platform/gateway/ \
+            platform/infrastructure/ \
+            platform/namespaces/ \
+            platform/monitoring/alert-sink/ \
+            platform/monitoring/rules/ \
+            platform/monitoring/dashboards/ \
+            platform/observability-apps/
+
+      - name: YAML parse (manifests only, values files excluded)
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+
+          import yaml
+
+          # Helm values files are not Kubernetes manifests and are excluded from
+          # schema/YAML manifest validation on purpose.
+          VALUES_FILES = {
+              "platform/exporters/postgres-exporter-values.yaml",
+              "platform/exporters/redis-exporter-values.yaml",
+              "platform/logging/alloy-values.yaml",
+              "platform/logging/loki-values.yaml",
+              "platform/monitoring/kps-values.yaml",
+              "platform/observability/otel-collector-values.yaml",
+              "platform/tracing/tempo-values.yaml",
+          }
+
+          files = sorted(
+              glob.glob("argocd/**/*.yaml", recursive=True)
+              + glob.glob("platform/**/*.yaml", recursive=True)
+          )
+
+          errors = 0
+          checked = 0
+          for path in files:
+              if path in VALUES_FILES:
+                  continue
+              checked += 1
+              try:
+                  list(yaml.safe_load_all(open(path, encoding="utf-8")))
+              except Exception as exc:  # noqa: BLE001
+                  errors += 1
+                  print(f"FAIL {path}: {exc}")
+          print(f"YAML parse: {checked} manifest(s) checked, {errors} error(s)")
+          sys.exit(1 if errors else 0)
+          PY
+
+  yaml-hygiene:
+    name: yaml-hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: YAML parse (manifests only, values files excluded)
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+
+          import yaml
+
+          VALUES_FILES = {
+              "platform/exporters/postgres-exporter-values.yaml",
+              "platform/exporters/redis-exporter-values.yaml",
+              "platform/logging/alloy-values.yaml",
+              "platform/logging/loki-values.yaml",
+              "platform/monitoring/kps-values.yaml",
+              "platform/observability/otel-collector-values.yaml",
+              "platform/tracing/tempo-values.yaml",
+          }
+
+          files = sorted(
+              glob.glob("argocd/**/*.yaml", recursive=True)
+              + glob.glob("platform/**/*.yaml", recursive=True)
+          )
+
+          errors = 0
+          checked = 0
+          for path in files:
+              if path in VALUES_FILES:
+                  continue
+              checked += 1
+              try:
+                  list(yaml.safe_load_all(open(path, encoding="utf-8")))
+              except Exception as exc:  # noqa: BLE001
+                  errors += 1
+                  print(f"FAIL {path}: {exc}")
+          print(f"YAML parse: {checked} manifest(s) checked, {errors} error(s)")
+          sys.exit(1 if errors else 0)
+          PY
+
+      - name: Reject trailing whitespace
+        run: |
+          set -euo pipefail
+          if grep -rInE ' +$' \
+              --include='*.yaml' --include='*.yml' \
+              argocd platform charts environments .github; then
+            echo "::error::trailing whitespace found in the files listed above"
+            exit 1
+          fi
+          echo "No trailing whitespace found"
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          actionlint --version
+
+      - name: Run actionlint on this workflow
+        run: actionlint -color .github/workflows/validate.yml
