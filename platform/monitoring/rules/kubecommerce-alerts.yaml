@@ -29,12 +29,24 @@ spec:
       interval: 30s
       rules:
         # --- API 5xx ratio > 5% for 5m -------------------------------------
+        #
+        # SLI scope (docs/slo.md section 2):
+        #   * `route!~"/health.*|/metrics"` drops operational endpoints, so
+        #     probe 200s cannot dilute the ratio (this middleware records them);
+        #   * the intentional client outcomes 401/404/422 are excluded from
+        #     BOTH numerator and denominator (they do not burn budget);
+        #   * 5xx remain in the denominator as failures. Other 4xx stay
+        #     in-scope, non-failing.
         - alert: KubeCommerceApiHighErrorRate
           expr: |
             (
-              sum by (namespace, service) (rate(kubecommerce_http_requests_total{status=~"5.."}[5m]))
+              sum by (namespace, service) (
+                rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status=~"5.."}[5m])
+              )
               /
-              sum by (namespace, service) (rate(kubecommerce_http_requests_total[5m]))
+              sum by (namespace, service) (
+                rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"4(01|04|22)"}[5m])
+              )
             ) > 0.05
           for: 5m
           labels:
@@ -82,13 +94,16 @@ spec:
         #     no series and cannot fire — this is why a bare `== 0` comparison is
         #     not used (it would be absent, not zero, and never fire).
         #   * `>= 0.1` req/s (~30 requests over the 5m rate window) is a minimum
-        #     volume floor so a single scrape/probe blip does not page anyone and
-        #     health probes returning 200 cannot mask a genuinely dead service.
-        #     If >=30 requests all returned 5xx, the numerator divides to exactly
-        #     1, which trips `> 0.99`.
+        #     volume floor, measured over in-scope traffic only, so a single
+        #     scrape blip does not page anyone.
+        #   * `route!~"/health.*|/metrics"` excludes operational endpoints
+        #     entirely, and 401/404/422 are excluded from denominator and
+        #     numerator. Health probes can therefore neither dilute the ratio
+        #     nor mask a genuinely dead service: if all real traffic 5xx's, the
+        #     in-scope denominator is non-zero and the numerator divides to 1.
         #   * `and on (namespace, service)` requires the failing-rate series to
-        #     have a matching non-absent total-rate series. Since the numerator is
-        #     a subset re-aggregation of the denominator, this is effectively
+        #     have a matching non-absent denominator series. Since the numerator
+        #     is a subset re-aggregation of the denominator, this is effectively
         #     always true, but it makes the intent explicit and guards against
         #     label-set drift between the two aggregations.
         # Kept as a distinct signal from KubeCommerceApiHighErrorRate: this is the
@@ -96,12 +111,18 @@ spec:
         - alert: KubeCommerceApiTotalFailure
           expr: |
             (
-              sum by (namespace, service) (rate(kubecommerce_http_requests_total{status=~"5.."}[5m]))
+              sum by (namespace, service) (
+                rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status=~"5.."}[5m])
+              )
               /
-              sum by (namespace, service) (rate(kubecommerce_http_requests_total[5m]))
+              sum by (namespace, service) (
+                rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"4(01|04|22)"}[5m])
+              )
             ) > 0.99
             and on (namespace, service)
-            sum by (namespace, service) (rate(kubecommerce_http_requests_total[5m])) >= 0.1
+            sum by (namespace, service) (
+              rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"4(01|04|22)"}[5m])
+            ) >= 0.1
           for: 5m
           labels:
             severity: critical
@@ -116,6 +137,123 @@ spec:
               Check the KubeCommerce - API RED dashboard, pod readiness and the
               service logs.
             runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/runbook.md#total-failure
+
+    # --- SLO error-budget burn rate (guide section 9) --------------------
+    #
+    # Burn rate = error_ratio / (1 - SLO). For the 99.9% availability SLO,
+    # 1 - SLO = 0.001, so:
+    #   * 14.4x = "2% of the 30-day budget in 1 hour"  -> page (critical)
+    #   *  6.0x = "5% of the 30-day budget in 6 hours" -> ticket (warning)
+    # threshold = burn_rate * 0.001 -> 0.0144 (fast) and 0.006 (slow).
+    #
+    # SLI scope matches docs/slo.md sections 2/3/5 exactly:
+    #   * route!~"/health.*|/metrics" drops operational endpoints so probe
+    #     200s cannot dilute the ratio (the middleware records /health/* and
+    #     /metrics);
+    #   * the intentional client outcomes 401/404/422 are excluded from BOTH
+    #     numerator and denominator (they do not burn budget);
+    #   * 5xx stay in the denominator as failures.
+    # So the error ratio is 1 - success_ratio, where
+    #   success   = rate(status!~"5..", status!~"4(01|04|22)")  [in-scope]
+    #   in-scope  = rate(status!~"4(01|04|22)")                 [not 401/404/422]
+    # Each rule requires BOTH the short and the long window to exceed the
+    # threshold (multi-window), so a brief spike cannot fire; the `for` window
+    # is a final debounce on top of the short window. An idle service emits no
+    # kubecommerce_http_requests_total series (or yields 0/0 = NaN, and
+    # NaN > x is always false), so no traffic never pages.
+    - name: kubecommerce.slo.burnrate
+      interval: 30s
+      rules:
+        # --- Fast burn: 5m + 1h at 14.4x -> page -------------------------
+        - alert: KubeCommerceSLOBurnRateFast
+          expr: |
+            (
+              (
+                1 - (
+                  sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"5..", status!~"4(01|04|22)"}[5m])
+                  )
+                  / sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"4(01|04|22)"}[5m])
+                  )
+                )
+              ) > 14.4 * 0.001
+            )
+            and
+            (
+              (
+                1 - (
+                  sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"5..", status!~"4(01|04|22)"}[1h])
+                  )
+                  / sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"4(01|04|22)"}[1h])
+                  )
+                )
+              ) > 14.4 * 0.001
+            )
+          for: 2m
+          labels:
+            severity: critical
+            component: slo
+            team: kubecommerce
+            slo_window: fast-burn
+          annotations:
+            summary: "KubeCommerce {{ $labels.service }} is fast-burning its error budget (14.4x)"
+            description: >-
+              {{ $labels.service }} in namespace {{ $labels.namespace }} is
+              burning the 99.9% availability error budget at more than 14.4x
+              over both 5m and 1h (short-window error ratio
+              {{ $value | humanizePercentage }}); at this rate ~2% of the
+              30-day budget is consumed per hour. Page the on-call: check the
+              KubeCommerce - API RED dashboard, recent rollouts and downstream
+              dependencies.
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/slo.md#5-error-budget-burn-rate-alerting
+
+        # --- Slow burn: 30m + 6h at 6x -> ticket -------------------------
+        - alert: KubeCommerceSLOBurnRateSlow
+          expr: |
+            (
+              (
+                1 - (
+                  sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"5..", status!~"4(01|04|22)"}[30m])
+                  )
+                  / sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"4(01|04|22)"}[30m])
+                  )
+                )
+              ) > 6 * 0.001
+            )
+            and
+            (
+              (
+                1 - (
+                  sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"5..", status!~"4(01|04|22)"}[6h])
+                  )
+                  / sum by (namespace, service) (
+                    rate(kubecommerce_http_requests_total{route!~"/health.*|/metrics", status!~"4(01|04|22)"}[6h])
+                  )
+                )
+              ) > 6 * 0.001
+            )
+          for: 15m
+          labels:
+            severity: warning
+            component: slo
+            team: kubecommerce
+            slo_window: slow-burn
+          annotations:
+            summary: "KubeCommerce {{ $labels.service }} is slowly burning its error budget (6x)"
+            description: >-
+              {{ $labels.service }} in namespace {{ $labels.namespace }} is
+              burning the 99.9% availability error budget at more than 6x over
+              both 30m and 6h (short-window error ratio
+              {{ $value | humanizePercentage }}); at this rate ~5% of the
+              30-day budget is consumed per 6 hours. Open a ticket to
+              investigate the elevated 5xx rate before it becomes a page.
+            runbook_url: https://github.com/bipulprasadjain007/project-1/blob/main/docs/slo.md#5-error-budget-burn-rate-alerting
 
 ---
 apiVersion: monitoring.coreos.com/v1
