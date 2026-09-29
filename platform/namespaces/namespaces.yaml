@@ -91,3 +91,44 @@ metadata:
   labels:
     app.kubernetes.io/part-of: kubecommerce
     app.kubernetes.io/managed-by: argocd
+---
+# kyverno hosts the Kyverno policy engine (guide Phase 12.4). Created here, with
+# the namespaces Application at wave -5, so the Kyverno and ClusterPolicy
+# Applications (waves -2 and -1) can target it with CreateNamespace=false.
+# Kyverno's own controllers ship a hardened securityContext; `audit`/`warn`
+# surface deviations from `restricted` without blocking admission.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kyverno
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/managed-by: argocd
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# external-secrets / cert-manager are installed by the cloud Applications
+# (platform/cloud-apps) and stay inert on kind unless explicitly synced.
+# Both ship hardened securityContexts, so `enforce: baseline` (with
+# warn/audit restricted) matches the other platform namespaces.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/managed-by: argocd
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/managed-by: argocd
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

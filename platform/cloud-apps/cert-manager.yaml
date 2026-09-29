@@ -1,0 +1,113 @@
+# Argo CD Application: cert-manager (guide Phase 13, Step 13.4).
+#
+# cert-manager automates the TLS certificate for the north-south Gateway:
+# it solves ACME HTTP-01 challenges THROUGH the shared Gateway API Gateway
+# (see platform/cert-manager/cluster-issuers/) and writes the resulting
+# certificate into the `kubecommerce-tls` Secret that the Gateway's HTTPS
+# listener references (platform/gateway/gateway.yaml).
+#
+# ---------------------------------------------------------------------------
+# CLOUD-ONLY, DELIBERATELY MANUAL SYNC
+# ---------------------------------------------------------------------------
+# No `syncPolicy.automated` block: nothing is installed until the operator
+# sets the real email/domain placeholders and syncs manually. On kind the
+# Application stays OutOfSync and inert - local HTTP still works with no TLS.
+#
+# ---------------------------------------------------------------------------
+# ORDERING / PREREQUISITES
+# ---------------------------------------------------------------------------
+# Sync-wave 0 inside `kubecommerce-platform-cloud` (argocd/platform-apps/
+# platform-cloud.yaml). The Gateway API CRDs must already exist before
+# cert-manager starts (Gateway API support is enabled below), otherwise
+# restart the cert-manager Deployment after the CRDs land:
+#   kubectl -n cert-manager rollout restart deployment cert-manager
+#
+# ---------------------------------------------------------------------------
+# OUT-OF-SCOPE PREREQUISITE (owner: Argo CD bootstrap / AppProject)
+# ---------------------------------------------------------------------------
+# AppProject `kubecommerce` (argocd/project.yaml) must also allow:
+#   * sourceRepos: https://charts.jetstack.io
+#   * destinations: namespace `cert-manager` (server in-cluster)
+# Resource KINDS already whitelisted: CustomResourceDefinition,
+# cluster RBAC + webhook configurations, and namespace-scoped
+# Deployment/Service/ServiceAccount/ConfigMap/Secret/PodDisruptionBudget.
+# The `cert-manager.io/ClusterIssuer` + `Certificate` kinds are whitelisted
+# too (platform/cert-manager/cluster-issuers/ and the auto-created Gateway
+# Certificate in platform-system).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: cloud
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    # Pinned chart version (appVersion v1.21.2). Do not float.
+    targetRevision: v1.21.2
+    helm:
+      releaseName: cert-manager
+      values: |
+        # Install the cert-manager.io / acme.cert-manager.io CRDs with the chart.
+        crds:
+          enabled: true
+        replicaCount: 1
+        # Gateway API support. In cert-manager >= 1.20 this is the
+        # ControllerConfiguration field `gatewayAPI.enabled` (the old
+        # `--enable-gateway-api` flag / `enableGatewayAPI` key was replaced).
+        # It is what lets the ACME HTTP-01 `gatewayHTTPRoute` solver create a
+        # temporary HTTPRoute on the shared Gateway.
+        config:
+          gatewayAPI:
+            enabled: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        webhook:
+          replicaCount: 1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        cainjector:
+          replicaCount: 1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+  destination:
+    server: https://kubernetes.default.svc
+    # Cloud-only namespace. CreateNamespace is enabled so the Application is
+    # self-contained; the AppProject must allow this destination (see above).
+    namespace: cert-manager
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      # cert-manager.io CRDs are installed in the same sync.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 3

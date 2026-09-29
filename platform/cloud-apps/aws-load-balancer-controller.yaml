@@ -1,0 +1,122 @@
+# Argo CD Application: AWS Load Balancer Controller (guide Phase 13, Step 13.3).
+#
+# Envoy Gateway exposes the shared Gateway through a Kubernetes Service of
+# type LoadBalancer. On EKS that Service only becomes an AWS Network Load
+# Balancer (NLB) if the AWS Load Balancer Controller is running: it watches
+# LoadBalancer Services and reconciles the ELB/NLB + target groups. Without
+# this Application the Gateway's external address stays <pending>, which would
+# also block cert-manager's ACME HTTP-01 validation and public HTTPS.
+#
+# ---------------------------------------------------------------------------
+# CLOUD-ONLY, DELIBERATELY MANUAL SYNC
+# ---------------------------------------------------------------------------
+# No `syncPolicy.automated` block: nothing is installed until an operator
+# supplies the Terraform outputs and syncs manually. Inert on kind (kind has no
+# cloud provider; the EnvoyProxy NodePort override is used there instead).
+#
+# Wave 0 inside `kubecommerce-platform-cloud` (argocd/platform-apps/
+# platform-cloud.yaml).
+#
+# ---------------------------------------------------------------------------
+# WORKLOAD IDENTITY (no static AWS keys)
+# ---------------------------------------------------------------------------
+# Terraform creates an EKS Pod Identity association targeting namespace
+# `platform-system` and ServiceAccount `aws-load-balancer-controller`
+# (a sibling Terraform fix aligns the association with this Application). Pod
+# Identity means the controller gets temporary AWS credentials from the node's
+# Pod Identity Agent - no `eks.amazonaws.com/role-arn` annotation and no static
+# access keys. The IAM role needs the standard LBC policy (ec2:Describe*,
+# elasticloadbalancing:*, iam:CreateServiceLinkedRole, ...).
+#
+# ---------------------------------------------------------------------------
+# OUT-OF-SCOPE PREREQUISITE (owner: Argo CD bootstrap / AppProject)
+# ---------------------------------------------------------------------------
+# AppProject `kubecommerce` (argocd/project.yaml) must allow:
+#   * sourceRepos: https://aws.github.io/eks-charts
+#   * destination: namespace `platform-system` (already allowed)
+# Resource kinds already whitelisted: ServiceAccount, ClusterRole/Binding,
+# Mutating/ValidatingWebhookConfiguration, Deployment, Service, Secret.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aws-load-balancer-controller
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: cloud
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://aws.github.io/eks-charts
+    chart: aws-load-balancer-controller
+    # Pinned chart version (appVersion v3.5.0). Do not float.
+    targetRevision: 3.5.0
+    helm:
+      releaseName: aws-load-balancer-controller
+      values: |
+        # Terraform outputs: the EKS cluster name and region. Replace both
+        # placeholders before syncing.
+        clusterName: <eks-cluster-name>
+        region: <aws-region>
+        # The Pod Identity association created by Terraform targets exactly
+        # this ServiceAccount (namespace platform-system).
+        serviceAccount:
+          create: true
+          name: aws-load-balancer-controller
+        # The platform routes through Gateway API/NLB, not ALB Ingress. Disabling
+        # the IngressClass resource also removes the chart's `kind: List`
+        # wrapper, which the restricted AppProject does not allow.
+        createIngressClassResource: false
+        # Modest footprint for the portfolio cluster.
+        replicaCount: 1
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+  # The chart generates a fresh webhook certificate on every offline render
+  # (`helm template` cannot `lookup` the existing Secret), so Argo CD would
+  # report perpetual drift and churn the webhook caBundle. Ignore the generated
+  # cert material; the controller self-manages it.
+  ignoreDifferences:
+    - group: ""
+      kind: Secret
+      name: aws-load-balancer-tls # rendered Secret name for the webhook cert
+      jsonPointers:
+        - /data
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      name: aws-load-balancer-webhook
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      name: aws-load-balancer-webhook
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+  destination:
+    server: https://kubernetes.default.svc
+    # Namespace `platform-system` is created by platform/namespaces/.
+    namespace: platform-system
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      # The webhook configuration may not be registered on the first pass.
+      - SkipDryRunOnMissingResource=true
+      # Honour `ignoreDifferences` during sync so a manual sync cannot
+      # overwrite the controller-managed webhook certificate material.
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 3

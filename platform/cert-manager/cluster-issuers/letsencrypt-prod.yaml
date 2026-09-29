@@ -1,0 +1,44 @@
+# ClusterIssuer: Let's Encrypt PRODUCTION (guide Phase 13, Step 13.4).
+#
+# Use this issuer for production only: it issues browser-trusted certificates
+# but has tight ACME rate limits (50 certs/domain/week, 5 duplicate certs/week),
+# so never point dev/staging at it or iterate against it. It is selected by the
+# annotation on the shared Gateway:
+#   cert-manager.io/cluster-issuer: letsencrypt-prod
+# (see platform/gateway/gateway.yaml; uncomment the prod variant when the real
+# domain and public DNS exist).
+#
+# HOW HTTP-01 IS SOLVED
+# ---------------------
+# `http01.gatewayHTTPRoute.parentRefs` makes cert-manager serve the ACME
+# challenge through the shared Gateway in platform-system (port-80 `http`
+# listener). See platform/cert-manager/README.md.
+#
+# PLACEHOLDERS: the email below is a placeholder and MUST be replaced with a
+# real address you control before the issuer can register with ACME.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: tls
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    # TODO(replace): real ops inbox. example.com is reserved and will fail ACME
+    # registration/expiry notices.
+    email: platform-engineering@example.com
+    # ACME account private key (managed by cert-manager, never in Git).
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - name: kubecommerce-gateway
+                namespace: platform-system
+                kind: Gateway
+                group: gateway.networking.k8s.io
+                # The shared Gateway's cleartext listener (port 80).
+                sectionName: http

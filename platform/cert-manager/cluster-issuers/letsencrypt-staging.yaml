@@ -1,0 +1,47 @@
+# ClusterIssuer: Let's Encrypt STAGING (guide Phase 13, Step 13.4).
+#
+# Use this issuer for dev/staging (and for the first smoke test of the prod
+# domain): it issues from the ACME staging endpoint, which is NOT trusted by
+# browsers and has much higher rate limits, but exercises the exact HTTP-01
+# path. It is selected by the annotation on the shared Gateway:
+#   cert-manager.io/cluster-issuer: letsencrypt-staging
+# (see platform/gateway/gateway.yaml; the annotation is commented because the
+# local kind cluster has no public DNS).
+#
+# HOW HTTP-01 IS SOLVED
+# ---------------------
+# `http01.gatewayHTTPRoute.parentRefs` points cert-manager at the shared
+# Gateway in platform-system. When a Certificate is issued, cert-manager
+# creates a temporary HTTPRoute on that Gateway (on the port-80 `http`
+# listener) that serves GET /.well-known/acme-challenge/<token>. Let's Encrypt
+# reaches it through the Gateway's externally exposed address - see
+# platform/cert-manager/README.md for the DNS/prerequisites.
+#
+# PLACEHOLDERS: the email below is a placeholder and MUST be replaced with a
+# real address you control before the issuer can register with ACME.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: tls
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    # TODO(replace): real ops inbox. example.com is reserved and will fail ACME
+    # registration/expiry notices.
+    email: platform-engineering@example.com
+    # ACME account private key (managed by cert-manager, never in Git).
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - name: kubecommerce-gateway
+                namespace: platform-system
+                kind: Gateway
+                group: gateway.networking.k8s.io
+                # The shared Gateway's cleartext listener (port 80).
+                sectionName: http

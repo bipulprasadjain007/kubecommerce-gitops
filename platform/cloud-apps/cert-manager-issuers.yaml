@@ -1,0 +1,48 @@
+# Argo CD Application: cert-manager ClusterIssuers (guide Phase 13, Step 13.4).
+#
+# Applies the ACME ClusterIssuers under platform/cert-manager/cluster-issuers/.
+# cert-manager then issues the Gateway TLS certificate automatically because
+# the shared Gateway carries the `cert-manager.io/cluster-issuer` annotation
+# (platform/gateway/gateway.yaml) and the HTTPS listener has a hostname +
+# `tls.mode: Terminate` + a `certificateRef`.
+#
+# Sync-wave 1 inside `kubecommerce-platform-cloud`: runs after the
+# cert-manager Helm chart (wave 0) installed the cert-manager.io CRDs.
+#
+# CLOUD-ONLY, MANUAL SYNC: no `automated` block, so this is inert on kind.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager-issuers
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: cloud
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/cert-manager/cluster-issuers
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    # ClusterIssuer is cluster-scoped; the destination namespace is nominal.
+    namespace: platform-system
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 3

@@ -31,9 +31,18 @@ spec:
     - name: kubecommerce-gateway
       namespace: platform-system
       sectionName: http
-  # Uncomment together with the Gateway listener hostname to pin the host:
+    # Cloud/AWS: also attach the route to the Gateway's HTTPS listener so the
+    # same paths are served over TLS. Leave commented on kind (no certificate
+    # exists there). Uncomment together with the hostname below.
+    # - name: kubecommerce-gateway
+    #   namespace: platform-system
+    #   sectionName: https
+  # Optional cloud host pinning (matches the Gateway's https listener hostname).
+  # Uncomment to enforce the host over HTTPS; use kubecommerce-<env>.<domain>
+  # when each environment gets its own cluster/domain. Local kind keeps no
+  # hostname so any Host header matches and http://localhost/ works.
   # hostnames:
-  #   - kubecommerce.local
+  #   - kubecommerce.<domain>
   rules:
     - matches:
         - path:
@@ -56,8 +65,13 @@ spec:
     - name: kubecommerce-gateway
       namespace: platform-system
       sectionName: http
+  # Cloud/AWS: also attach to the HTTPS listener (uncomment together with the
+  # hostname). See the dev route above for details.
+  # - name: kubecommerce-gateway
+  #   namespace: platform-system
+  #   sectionName: https
   # hostnames:
-  #   - kubecommerce.local
+  #   - kubecommerce.<domain>
   rules:
     - matches:
         - path:
@@ -80,8 +94,13 @@ spec:
     - name: kubecommerce-gateway
       namespace: platform-system
       sectionName: http
+  # Cloud/AWS: also attach to the HTTPS listener (uncomment together with the
+  # hostname). See the dev route above for details.
+  # - name: kubecommerce-gateway
+  #   namespace: platform-system
+  #   sectionName: https
   # hostnames:
-  #   - kubecommerce.local
+  #   - kubecommerce.<domain>
   rules:
     - matches:
         - path:

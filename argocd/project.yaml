@@ -28,12 +28,18 @@ spec:
     - https://grafana.github.io/helm-charts # Loki, Alloy, Tempo
     - https://grafana-community.github.io/helm-charts # Loki/Tempo (community charts)
     - https://open-telemetry.github.io/opentelemetry-helm-charts # OTel Collector
-  # Allowed deployment targets. The three application namespaces plus the shared
-  # platform namespaces the platform apps deploy into. `argocd` is included
-  # because the nested platform app-of-apps (`argocd/platform-apps/*`) creates
-  # its child Application objects there; the blast radius is bounded by the
-  # namespace-scoped allow-list below (an Application is only a control object
-  # and all child resources are still subject to this project's rules).
+    - https://kyverno.github.io/kyverno/ # Kyverno policy engine (Phase 12.4)
+    - https://charts.external-secrets.io # External Secrets Operator
+    - https://charts.jetstack.io # cert-manager
+    - https://aws.github.io/eks-charts # AWS Load Balancer Controller
+  # Allowed deployment targets: the three application namespaces plus the shared
+  # platform namespaces the platform apps deploy into (infrastructure,
+  # observability/exporters, Kyverno policies, External Secrets, cert-manager).
+  # `argocd` is included because the nested platform app-of-apps
+  # (`argocd/platform-apps/*`) creates its child Application objects there; the
+  # blast radius is bounded by the namespace-scoped allow-list below (an
+  # Application is only a control object and all child resources are still
+  # subject to this project's rules).
   destinations:
     - namespace: kubecommerce-dev
       server: https://kubernetes.default.svc
@@ -46,6 +52,12 @@ spec:
     - namespace: monitoring
       server: https://kubernetes.default.svc
     - namespace: observability
+      server: https://kubernetes.default.svc
+    - namespace: external-secrets
+      server: https://kubernetes.default.svc
+    - namespace: cert-manager
+      server: https://kubernetes.default.svc
+    - namespace: kyverno
       server: https://kubernetes.default.svc
     - namespace: argocd
       server: https://kubernetes.default.svc
@@ -110,6 +122,10 @@ spec:
       kind: EnvoyProxy
     - group: external-secrets.io
       kind: ExternalSecret
+    - group: kyverno.io
+      kind: Policy # namespaced Kyverno policies (ClusterPolicy is cluster-scoped)
+    - group: cert-manager.io
+      kind: Certificate
   # Cluster-scoped kinds are denied by default. The list is kept minimal but now
   # includes what the observability stack genuinely needs:
   #   Namespace                - platform/namespaces/namespaces.yaml
@@ -132,3 +148,9 @@ spec:
       kind: MutatingWebhookConfiguration
     - group: admissionregistration.k8s.io
       kind: ValidatingWebhookConfiguration
+    - group: kyverno.io
+      kind: ClusterPolicy
+    - group: external-secrets.io
+      kind: ClusterSecretStore
+    - group: cert-manager.io
+      kind: ClusterIssuer

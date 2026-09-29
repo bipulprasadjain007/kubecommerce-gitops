@@ -1,0 +1,59 @@
+# Platform child Application: AWS delivery wiring (guide Phase 13).
+#
+# Nested app-of-apps applying the cloud-only Applications in
+# platform/cloud-apps:
+#   external-secrets.yaml              ESO Helm chart            (wave 0)
+#   external-secrets-manifests.yaml    ClusterSecretStore +       (wave 1)
+#                                      per-env ExternalSecrets
+#   cert-manager.yaml                  cert-manager Helm chart   (wave 0)
+#   cert-manager-issuers.yaml          ACME ClusterIssuers       (wave 1)
+#   aws-load-balancer-controller.yaml  AWS LBC (NLB for the       (wave 0)
+#                                      Envoy Gateway Service)
+#
+# Sync-wave -3: after namespaces (-5) and alongside the observability umbrella
+# (-3), before the per-environment Applications (ApplicationSet, wave 5).
+#
+# IMPORTANT: the cloud Applications intentionally have NO automated sync
+# policy, so on the local kind cluster this umbrella creates them but they do
+# nothing until an operator supplies the Terraform outputs (region, secret
+# prefix, Gateway DNS) and syncs them manually. Kind continues to use
+# `make k8s-secrets` + the HTTP-only Gateway.
+#
+# Bootstrap prerequisites outside this lane (owner: Argo CD bootstrap /
+# AppProject argocd/project.yaml): sourceRepos for charts.external-secrets.io
+# and charts.jetstack.io, plus destination namespaces external-secrets and
+# cert-manager. See platform/external-secrets/README.md and
+# platform/cert-manager/README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-cloud
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/cloud-apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    # This umbrella only creates child Application objects (in `argocd`); the
+    # child Applications own their own destination namespaces.
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+  revisionHistoryLimit: 3

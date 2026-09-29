@@ -20,6 +20,16 @@
 #     2. uncomment `hostname: kubecommerce.local` below;
 #     3. uncomment the matching `hostnames:` list on each HTTPRoute.
 #   With the hostname omitted, /etc/hosts mapping is optional.
+#
+# Cloud / AWS TLS (guide Phase 13, Step 13.4):
+#   The `https` listener (443, TLS Terminate) references the Secret
+#   `platform-system/kubecommerce-tls`. On EKS the cert-manager Gateway API
+#   integration creates that Certificate automatically once (a) the Gateway
+#   carries the `cert-manager.io/cluster-issuer` annotation (commented below)
+#   and (b) this listener has a non-empty `hostname` (commented placeholder
+#   below) with `tls.mode: Terminate`. On kind the Secret does not exist, so
+#   the https listener stays unprogrammed while the http listener keeps
+#   working - the cloud wiring is inert locally.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -27,6 +37,12 @@ metadata:
   namespace: platform-system
   labels:
     app.kubernetes.io/part-of: kubecommerce
+  # Cert-manager Gateway API integration: uncomment exactly one issuer and set
+  # the real public hostname on the https listener before syncing on AWS.
+  #   cert-manager.io/cluster-issuer: letsencrypt-staging   # dev/staging
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod      # production
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt-staging
 spec:
   gatewayClassName: envoy-gateway
   # Use the EnvoyProxy CR to switch the generated data-plane Service to
@@ -41,6 +57,21 @@ spec:
       protocol: HTTP
       port: 80
       # hostname: kubecommerce.local
+      allowedRoutes:
+        namespaces:
+          from: All
+    # HTTPS for cloud/AWS. The TLS Secret is created by cert-manager (see the
+    # annotation above); the hostname placeholder must be replaced with the
+    # real public domain for cert-manager to issue and for HTTPRoutes to bind.
+    - name: https
+      protocol: HTTPS
+      port: 443
+      # hostname: kubecommerce.<domain>
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: kubecommerce-tls
+            namespace: platform-system
       allowedRoutes:
         namespaces:
           from: All

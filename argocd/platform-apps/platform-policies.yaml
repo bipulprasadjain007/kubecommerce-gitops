@@ -1,0 +1,41 @@
+# Platform child Application: policy as code (guide Phase 12.4).
+#
+# Applies the platform/policies/apps Applications:
+#   * kubecommerce-platform-kyverno          (wave -2) - Kyverno Helm chart
+#   * kubecommerce-platform-kyverno-policies (wave -1) - ClusterPolicies
+#
+# Sync wave -2: after the namespaces (-5, which now include `kyverno`) and
+# alongside the gateway/infrastructure (-4). Runs before the per-environment
+# Applications (ApplicationSet, wave 5), so the policies are active when the
+# application workloads are first admitted.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: policy
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/policies/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
