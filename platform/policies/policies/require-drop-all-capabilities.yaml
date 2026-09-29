@@ -1,0 +1,92 @@
+# Kyverno ClusterPolicy: containers must drop ALL Linux capabilities.
+#
+# Encodes guide Phase 12.3 ("dropped Linux capabilities"). AUDIT, scoped to the
+# kubecommerce application namespaces. The chart sets
+# `capabilities: {drop: [ALL]}` on every container, so it complies today.
+#
+# Implemented with `validate.deny`/JMESPath rather than a pattern: a pattern
+# `drop: [ALL]` requires the list to equal exactly `[ALL]`, which would reject a
+# container that additionally drops (or keeps) other capabilities. `contains`
+# correctly accepts `[ALL]` and `[ALL, NET_RAW]` while rejecting `[NET_RAW]` or
+# an absent `drop` list. Covers `containers`, `initContainers` and
+# `ephemeralContainers`; a missing capabilities block fails (safe default).
+#
+# Scoping/labels and the `CronJob` note are documented in
+# disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-require-drop-all-capabilities
+  annotations:
+    policies.kyverno.io/title: Require dropping all capabilities
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.3 - dropped Linux capabilities"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-drop-all-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Every container must set securityContext.capabilities.drop to include ALL."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.containers[?contains((securityContext.capabilities.drop || `[]`), 'ALL') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.initContainers || `[]`)[?contains((securityContext.capabilities.drop || `[]`), 'ALL') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.ephemeralContainers || `[]`)[?contains((securityContext.capabilities.drop || `[]`), 'ALL') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+
+    - name: require-drop-all-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Every container in the pod template must set securityContext.capabilities.drop to include ALL."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.template.spec.containers[?contains((securityContext.capabilities.drop || `[]`), 'ALL') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.template.spec.initContainers || `[]`)[?contains((securityContext.capabilities.drop || `[]`), 'ALL') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.template.spec.ephemeralContainers || `[]`)[?contains((securityContext.capabilities.drop || `[]`), 'ALL') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0

@@ -1,0 +1,85 @@
+# Kyverno ClusterPolicy: application Deployments must define readiness and
+# liveness probes.
+#
+# Encodes guide Phase 12.4 ("require probes for production Deployments"). AUDIT:
+# a missing probe degrades rolling updates rather than creating an immediate
+# security hole, so this is reported but not blocked. StatefulSets/DaemonSets are
+# included; Jobs/CronJobs are intentionally excluded (they are one-shot and have
+# no service endpoint to probe). The chart enables both probes for every service.
+#
+# The Pod rule has a precondition that skips pods owned by a Job, so the
+# migration Job's pod is not reported as a missing-probe violation.
+#
+# Scoping/labels are documented in disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-require-readiness-liveness-probes
+  annotations:
+    policies.kyverno.io/title: Require readiness and liveness probes
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.4 - require probes for production Deployments"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-probes-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      preconditions:
+        any:
+          # Skip pods whose controller is a Job (migration Jobs are one-shot).
+          - key: "{{ (request.object.metadata.ownerReferences || `[]`) | [?kind == 'Job'] | length(@) }}"
+            operator: Equals
+            value: 0
+      validate:
+        message: "Every container must define both a readinessProbe and a livenessProbe."
+        pattern:
+          spec:
+            containers:
+              # `"*"` requires the field to be present and non-null.
+              - readinessProbe: "*"
+                livenessProbe: "*"
+
+    - name: require-probes-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Every container in the pod template must define both a readinessProbe and a livenessProbe."
+        pattern:
+          spec:
+            template:
+              spec:
+                containers:
+                  - readinessProbe: "*"
+                    livenessProbe: "*"

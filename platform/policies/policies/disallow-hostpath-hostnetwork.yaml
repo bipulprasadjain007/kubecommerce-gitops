@@ -1,0 +1,100 @@
+# Kyverno ClusterPolicy: no hostPath volumes and no host namespace access.
+#
+# Encodes guide Phase 12.3 (host access is a container-escape risk) and Phase
+# 12.4's pod-security policy set. AUDIT: matches the application namespaces plus
+# `platform-system`; `monitoring`/`observability` are deliberately out of scope
+# because node-level agents (node-exporter, Alloy, log/trace collectors) may
+# legitimately need host access. The chart mounts only `emptyDir` and never sets
+# hostNetwork/hostPID/hostIPC, so it complies today.
+#
+# Implemented with `validate.deny` conditions because "no volume anywhere uses
+# hostPath" cannot be expressed as a positive pattern. Each condition treats an
+# absent field as safe, and `CronJob` is not matched (see the note in
+# disallow-privileged-containers.yaml): its generated Job is validated at the
+# correct `/spec/template/spec` path instead of reading a non-existent field and
+# failing open.
+#
+# Scoping/labels are documented in disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-disallow-hostpath-hostnetwork
+  annotations:
+    policies.kyverno.io/title: Disallow hostPath and host namespace access
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.3 - least-privilege host access; Phase 12.4 - pod-hardening policies"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: disallow-hostpath-hostnetwork-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "hostPath volumes, hostNetwork, hostPID and hostIPC are not allowed."
+        deny:
+          conditions:
+            any:
+              - key: "{{ (request.object.spec.volumes || `[]`) | [?hostPath] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ request.object.spec.hostNetwork || `false` }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.hostPID || `false` }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.hostIPC || `false` }}"
+                operator: Equals
+                value: true
+
+    - name: disallow-hostpath-hostnetwork-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "hostPath volumes, hostNetwork, hostPID and hostIPC are not allowed in the pod template."
+        deny:
+          conditions:
+            any:
+              - key: "{{ (request.object.spec.template.spec.volumes || `[]`) | [?hostPath] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ request.object.spec.template.spec.hostNetwork || `false` }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.template.spec.hostPID || `false` }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.template.spec.hostIPC || `false` }}"
+                operator: Equals
+                value: true

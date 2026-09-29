@@ -1,0 +1,70 @@
+# Deliberately INSECURE manifest - policy regression fixture (guide Phase 12.4).
+#
+# This is the "deliberately insecure test manifest" from the guide exit
+# criterion. It intentionally violates every Enforce/Audit policy in
+# ../policies/ and must NEVER be applied to a cluster. The `policy-validate` CI
+# job applies it with the Kyverno CLI and asserts the exact violation count and
+# every policy name, so deleting a policy cannot silently pass the gate.
+#
+# Violations exercised (one per policy):
+#   * disallow-privileged-containers ......... privileged + allowPrivilegeEscalation
+#   * disallow-mutable-image-tags ............ :latest tag (container + initContainer)
+#   * require-run-as-non-root ................ no pod-level runAsNonRoot/runAsUser
+#   * require-resource-requests-limits ....... no requests/limits
+#   * require-readiness-liveness-probes ...... no probes
+#   * restrict-image-registries .............. docker.io instead of ghcr.io/bipulprasadjain007
+#   * require-seccomp-runtime-default ........ no seccompProfile
+#   * require-readonly-root-filesystem ....... readOnlyRootFilesystem false/absent
+#   * disallow-hostpath-hostnetwork .......... hostPath volume + hostNetwork/hostPID/hostIPC
+#   * require-drop-all-capabilities .......... no capabilities.drop
+#
+# The hostile `initContainers` entry proves the init-container rules are wired
+# (a privileged, mutable-tag init container must also be rejected).
+#
+# The namespace and labels make the resource match the policies exactly as a
+# real kubecommerce workload would.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insecure-demo
+  namespace: kubecommerce-dev
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/name: insecure-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: insecure-demo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: kubecommerce
+        app.kubernetes.io/name: insecure-demo
+    spec:
+      hostNetwork: true
+      hostPID: true
+      hostIPC: true
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+      initContainers:
+        - name: hostile-init
+          image: docker.io/library/busybox:latest
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+            runAsNonRoot: false
+            runAsUser: 0
+            readOnlyRootFilesystem: false
+      containers:
+        - name: insecure
+          image: docker.io/library/nginx:latest
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+            runAsNonRoot: false
+            runAsUser: 0
+            readOnlyRootFilesystem: false

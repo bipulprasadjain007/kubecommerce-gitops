@@ -1,0 +1,48 @@
+# Platform child Application: Kyverno ClusterPolicies (guide Phase 12.4).
+#
+# Applies the cluster-scoped ClusterPolicy resources in
+# platform/policies/policies/. Kept separate from the Kyverno engine
+# Application so policy changes are reviewed and rolled out independently of an
+# engine upgrade.
+#
+# Sync wave -1: after Kyverno itself (-2) and its CRDs. The policies are
+# cluster-scoped; ServerSideApply avoids last-applied annotation limits and
+# `SkipDryRunOnMissingResource=true` covers the window where the Kyverno CRDs are
+# not yet Established on a fresh cluster.
+#
+# Promotion of an Audit policy to Enforce is a one-line change to
+# `spec.validationFailureAction` in platform/policies/policies/; see
+# platform/policies/README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-kyverno-policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: policy
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://github.com/bipulprasadjain007/kubecommerce-gitops.git
+    targetRevision: main
+    path: platform/policies/policies
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    # ClusterPolicies are cluster-scoped; the destination namespace only anchors
+    # the Application.
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

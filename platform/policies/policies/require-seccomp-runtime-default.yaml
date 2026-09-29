@@ -1,0 +1,75 @@
+# Kyverno ClusterPolicy: seccomp profile must be RuntimeDefault.
+#
+# Encodes guide Phase 12.3 ("seccomp RuntimeDefault where supported"). AUDIT:
+# reported but not blocked, so an unsupported runtime does not wedge a rollout.
+# The kubecommerce chart sets `seccompProfile: {type: RuntimeDefault}` in the
+# shared pod securityContext, so it complies today. The check is on the pod
+# security context, so it covers init/ephemeral containers too.
+#
+# Scoping/labels and the `CronJob` note are documented in
+# disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-require-seccomp-runtime-default
+  annotations:
+    policies.kyverno.io/title: Require RuntimeDefault seccomp profile
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.3 - seccomp RuntimeDefault"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-seccomp-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Pods must set seccompProfile.type to RuntimeDefault."
+        pattern:
+          spec:
+            securityContext:
+              seccompProfile:
+                type: RuntimeDefault
+
+    - name: require-seccomp-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "The pod template must set seccompProfile.type to RuntimeDefault."
+        pattern:
+          spec:
+            template:
+              spec:
+                securityContext:
+                  seccompProfile:
+                    type: RuntimeDefault

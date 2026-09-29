@@ -28,11 +28,12 @@
 # The chart HARDCODES `app.kubernetes.io/part-of: opentelemetry-collector` in its
 # common labels and has no `service.labels` field. Overriding it through
 # `additionalLabels` emits the key twice in one map, which `kubeconform -strict`
-# (and any strict YAML parser) rejects. So we:
-#   - put `app.kubernetes.io/part-of: kubecommerce` on the Pod via `podLabels`
-#     (this is the NetworkPolicy peer that actually matters), and
-#   - disable the chart Service (`service.enabled: false`) and render an
-#     equivalent contract-exact Service via `extraManifests` (below).
+# (and any strict YAML parser) rejects. So we put
+# `app.kubernetes.io/part-of: kubecommerce` on the Pod via `podLabels` - that is
+# the NetworkPolicy peer that actually matters - and keep the chart's own
+# Service (`service.enabled: true`, ports 4317/4318). The chart's Service keeps
+# its generated `part-of: opentelemetry-collector` label, which is harmless:
+# nothing selects Services by that label.
 # The chart still owns the Deployment, ConfigMap, ServiceAccount and RBAC.
 #
 # This chart version ships an EMPTY default `image.repository` and empty
@@ -56,6 +57,40 @@ command:
 # Pod labels: the NetworkPolicy egress peer matching this collector pod.
 podLabels:
   app.kubernetes.io/part-of: kubecommerce
+
+# ---------------------------------------------------------------------------
+# SECURITY CONTEXT (guide Phase 12.3 / 12.4)
+# ---------------------------------------------------------------------------
+# The collector Pod carries `app.kubernetes.io/part-of: kubecommerce` because the
+# application chart's NetworkPolicy egress peer selects it, so the hardening
+# policies in platform/policies/ would otherwise deny it in-cluster. It is
+# hardened to the same baseline as the application workloads: non-root, no
+# privilege escalation, read-only root filesystem, RuntimeDefault seccomp and all
+# Linux capabilities dropped.
+#
+# The configured pipeline (OTLP receivers, memory_limiter/batch processors, the
+# OTLP exporter and the health_check extension) keeps all state in memory and
+# mounts only the read-only config ConfigMap at /conf, so no writable `emptyDir`
+# is required for readOnlyRootFilesystem. If a `file_storage` extension or a
+# persistent sending queue is ever enabled, add an `extraVolumes` emptyDir and an
+# `extraVolumeMounts` entry at that extension's `directory` path here.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  capabilities:
+    drop:
+      - ALL
 
 resources:
   requests:

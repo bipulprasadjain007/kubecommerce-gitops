@@ -1,0 +1,110 @@
+# Kyverno ClusterPolicy: no privileged containers / no privilege escalation.
+#
+# Encodes guide Phase 12.4 ("disallow privileged containers") and Phase 12.3
+# ("dropped Linux capabilities"; a container that can escalate privileges is not
+# confined). ENFORCE: the hardened kubecommerce chart already complies
+# (`privileged` is never set; `allowPrivilegeEscalation: false` is set globally),
+# so this is safe to enforce from day one.
+#
+# Scoping (identical in every policy in this directory):
+#   * `namespaceSelector` selects the in-scope namespaces dynamically (Kubernetes
+#     auto-labels namespaces with `kubernetes.io/metadata.name`).
+#   * the second entry combines the explicit `namespaces` list with the
+#     `app.kubernetes.io/part-of: kubecommerce` label `selector`. The namespace
+#     condition bounds the label: a pod carrying that label in any other
+#     namespace (e.g. the OTel collector in `observability`) is NOT matched.
+#     The Kyverno CLI cannot evaluate namespace selectors and `helm template`
+#     omits `metadata.namespace`, so the `policy-validate` CI job injects the
+#     render namespace before applying; see platform/policies/README.md.
+# No entry can match a system namespace: the names are not in the list.
+#
+# Rules come in two flavours (Pods, and workload controllers whose pods are
+# generated later) and cover `initContainers` and `ephemeralContainers` too.
+# `CronJob` is deliberately NOT listed: its pod template lives at
+# `/spec/jobTemplate/spec/template/spec`, so validating a CronJob with the chart
+# template path would fail open/closed incorrectly. The Job the CronJob creates
+# is admitted (and validated here) at the correct `/spec/template/spec` path.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Disallow privileged containers
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.4 - disallow privileged containers; Phase 12.3 - dropped Linux capabilities"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-no-privileged-escalation-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Privileged containers and privilege escalation are not allowed."
+        # `=(...)` conditional anchors: absent fields are fine, explicit `true` fails.
+        pattern:
+          spec:
+            containers:
+              - =(securityContext):
+                  =(privileged): false
+                  =(allowPrivilegeEscalation): false
+            =(initContainers):
+              - =(securityContext):
+                  =(privileged): false
+                  =(allowPrivilegeEscalation): false
+            =(ephemeralContainers):
+              - =(securityContext):
+                  =(privileged): false
+                  =(allowPrivilegeEscalation): false
+
+    - name: require-no-privileged-escalation-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Privileged containers and privilege escalation are not allowed in the pod template."
+        pattern:
+          spec:
+            template:
+              spec:
+                containers:
+                  - =(securityContext):
+                      =(privileged): false
+                      =(allowPrivilegeEscalation): false
+                =(initContainers):
+                  - =(securityContext):
+                      =(privileged): false
+                      =(allowPrivilegeEscalation): false
+                =(ephemeralContainers):
+                  - =(securityContext):
+                      =(privileged): false
+                      =(allowPrivilegeEscalation): false

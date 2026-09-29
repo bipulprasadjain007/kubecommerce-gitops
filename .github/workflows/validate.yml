@@ -20,6 +20,9 @@ env:
   KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
   ACTIONLINT_VERSION: v1.7.12
   ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+  KYVERNO_VERSION: v1.19.1
+  # SHA-256 of kyverno-cli_v1.19.1_linux_x86_64.tar.gz (verified locally).
+  KYVERNO_CLI_SHA256: b38228f367fc0fdc2b08f4c83ea50ac5f16c60ff8d62d76a66157c33c47b70ae
 
 jobs:
   helm-validate:
@@ -93,7 +96,13 @@ jobs:
             platform/monitoring/alert-sink/ \
             platform/monitoring/rules/ \
             platform/monitoring/dashboards/ \
-            platform/observability-apps/
+            platform/observability-apps/ \
+            platform/policies/tests/ \
+            platform/policies/apps/ \
+            platform/policies/policies/ \
+            platform/cloud-apps/ \
+            platform/external-secrets/ \
+            platform/cert-manager/
 
       - name: YAML parse (manifests only, values files excluded)
         run: |
@@ -210,3 +219,156 @@ jobs:
 
       - name: Run actionlint on this workflow
         run: actionlint -color .github/workflows/validate.yml
+
+  policy-validate:
+    name: policy-validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install pinned Kyverno CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/kyverno-cli.tar.gz \
+            "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/kyverno-cli_${KYVERNO_VERSION}_linux_x86_64.tar.gz"
+          echo "${KYVERNO_CLI_SHA256}  /tmp/kyverno-cli.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/kyverno-cli.tar.gz -C /tmp kyverno
+          sudo install -m 0755 /tmp/kyverno /usr/local/bin/kyverno
+          kyverno version
+
+      - name: Render the hardened dev chart and stamp the render namespace
+        run: |
+          set -euo pipefail
+          helm template kubecommerce charts/kubecommerce \
+            -n kubecommerce-dev \
+            -f environments/dev/values.yaml > /tmp/kc-dev.yaml
+          # `helm template` omits metadata.namespace, but the policies are
+          # namespace-scoped. Stamp the render namespace so the gate actually
+          # exercises them (the ClusterPolicies cannot match a namespace-less
+          # render, which would make the check vacuous).
+          python3 - <<'PY'
+          import yaml
+
+          CLUSTER_SCOPED = {
+              "Namespace",
+              "ClusterRole",
+              "ClusterRoleBinding",
+              "CustomResourceDefinition",
+              "ValidatingWebhookConfiguration",
+              "MutatingWebhookConfiguration",
+          }
+          docs = [d for d in yaml.safe_load_all(open("/tmp/kc-dev.yaml")) if d]
+          for doc in docs:
+              if doc.get("kind") not in CLUSTER_SCOPED:
+                  doc.setdefault("metadata", {})["namespace"] = "kubecommerce-dev"
+          with open("/tmp/kc-dev-ns.yaml", "w") as handle:
+              yaml.safe_dump_all(docs, handle, sort_keys=False)
+          PY
+
+      - name: Hardened chart must satisfy every policy (expect no violations)
+        run: |
+          set -euo pipefail
+          set +e
+          kyverno apply platform/policies/policies --resource /tmp/kc-dev-ns.yaml | tee /tmp/kyverno-chart.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::the hardened chart violated a policy (exit ${rc})"
+            exit 1
+          fi
+          if ! grep -qE "fail: 0, warn: 0, error: 0" /tmp/kyverno-chart.txt; then
+            echo "::error::policy summary is not clean"
+            grep -E "pass:|fail:" /tmp/kyverno-chart.txt || true
+            exit 1
+          fi
+          if ! grep -qE "pass: [1-9]" /tmp/kyverno-chart.txt; then
+            echo "::error::no policy rule matched the rendered chart; policies are not being exercised"
+            exit 1
+          fi
+
+      - name: Insecure fixture must be rejected by every policy (exact count)
+        run: |
+          set -euo pipefail
+          set +e
+          kyverno apply platform/policies/policies \
+            --resource platform/policies/tests/insecure-deployment.yaml | tee /tmp/kyverno-insecure.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "${rc}" -eq 0 ]; then
+            echo "::error::the deliberately insecure fixture was NOT rejected"
+            exit 1
+          fi
+          # Exact expected violation count: one per policy (10).
+          if ! grep -qE "fail: 10, warn: 0, error: 0" /tmp/kyverno-insecure.txt; then
+            echo "::error::expected exactly 10 violations for the insecure fixture"
+            tail -1 /tmp/kyverno-insecure.txt || true
+            exit 1
+          fi
+          # Every policy must produce a violation, so deleting a policy cannot pass.
+          for policy in \
+            kubecommerce-disallow-privileged-containers \
+            kubecommerce-disallow-mutable-image-tags \
+            kubecommerce-require-run-as-non-root \
+            kubecommerce-require-resource-requests-limits \
+            kubecommerce-require-readiness-liveness-probes \
+            kubecommerce-restrict-image-registries \
+            kubecommerce-require-seccomp-runtime-default \
+            kubecommerce-require-readonly-root-filesystem \
+            kubecommerce-disallow-hostpath-hostnetwork \
+            kubecommerce-require-drop-all-capabilities ; do
+            if ! grep -q "policy ${policy} ->" /tmp/kyverno-insecure.txt; then
+              echo "::error::policy ${policy} did not fire on the insecure fixture"
+              exit 1
+            fi
+          done
+          echo "Insecure fixture rejected: 10 violations across 10 policies (exit ${rc})."
+
+      - name: Compliant fixture must pass every policy
+        run: |
+          set -euo pipefail
+          kyverno apply platform/policies/policies \
+            --resource platform/policies/tests/compliant-workload.yaml | tee /tmp/kyverno-compliant.txt
+          if ! grep -qE "fail: 0, warn: 0, error: 0" /tmp/kyverno-compliant.txt; then
+            echo "::error::the compliant fixture violated a policy"
+            exit 1
+          fi
+          if ! grep -qE "pass: [1-9]" /tmp/kyverno-compliant.txt; then
+            echo "::error::no policy rule matched the compliant fixture"
+            exit 1
+          fi
+          echo "Compliant fixture passed every policy."
+
+      - name: OTel collector must be hardened and outside the policy scope
+        run: |
+          set -euo pipefail
+          helm template otel-collector opentelemetry-collector \
+            --repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+            --version 0.173.1 \
+            -n observability \
+            -f platform/observability/otel-collector-values.yaml > /tmp/otel.yaml
+          # P1 regression guard: the rendered Pod must carry the hardened context.
+          for needle in \
+            "runAsNonRoot: true" \
+            "readOnlyRootFilesystem: true" \
+            "allowPrivilegeEscalation: false" \
+            "type: RuntimeDefault" \
+            "- ALL" ; do
+            if ! grep -q -- "${needle}" /tmp/otel.yaml; then
+              echo "::error::OTel collector render is missing hardening: ${needle}"
+              exit 1
+            fi
+          done
+          # `observability` is outside the namespace-bounded policy scope: the
+          # collector must not be matched, and must produce zero violations.
+          kyverno apply platform/policies/policies --resource /tmp/otel.yaml | tee /tmp/kyverno-otel.txt
+          if ! grep -qE "fail: 0, warn: 0, error: 0" /tmp/kyverno-otel.txt; then
+            echo "::error::policies unexpectedly flagged the out-of-scope OTel collector"
+            exit 1
+          fi
+          echo "OTel collector hardened and correctly outside the policy scope."

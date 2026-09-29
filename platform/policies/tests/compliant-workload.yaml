@@ -1,0 +1,137 @@
+# Hardened "golden path" fixture - the positive half of the policy regression
+# test (guide Phase 12.4). The `policy-validate` CI job applies the policies to
+# this file and asserts ZERO violations, pinning the other direction of the gate.
+#
+# It contains:
+#   * a Deployment in a kubecommerce namespace with a fully hardened pod and
+#     container securityContext, resources and both probes;
+#   * an initContainer with the same hardening (proves the init-container paths);
+#   * a hardened CronJob (proves the CronJob exclusion is intentional: the
+#     CronJob itself is not matched against the chart-template path by mistake,
+#     while the Job it creates is admitted at the correct path).
+#
+# Must stay valid under `kubeconform -strict`.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compliant-demo
+  namespace: kubecommerce-dev
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/name: compliant-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: compliant-demo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: kubecommerce
+        app.kubernetes.io/name: compliant-demo
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-demo
+          image: ghcr.io/bipulprasadjain007/kubecommerce-demo:1.2.3
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: app
+          image: ghcr.io/bipulprasadjain007/kubecommerce-demo:1.2.3
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: compliant-cronjob
+  namespace: kubecommerce-dev
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/name: compliant-cronjob
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: kubecommerce
+            app.kubernetes.io/name: compliant-cronjob
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: job
+              image: ghcr.io/bipulprasadjain007/kubecommerce-demo:1.2.3
+              securityContext:
+                privileged: false
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi

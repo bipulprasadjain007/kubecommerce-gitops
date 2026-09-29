@@ -1,0 +1,84 @@
+# Kyverno ClusterPolicy: pods must run as non-root.
+#
+# Encodes guide Phase 12.3 ("non-root containers") and Phase 12.4 ("require
+# non-root execution"). ENFORCE: the kubecommerce chart sets a pod-level
+# `securityContext` with `runAsNonRoot: true` and `runAsUser: 999` globally, so
+# it complies. A pod satisfies the policy with either `runAsNonRoot: true` OR an
+# explicit non-zero `runAsUser`. Because the check is on the POD security
+# context it also covers `initContainers` and `ephemeralContainers`.
+#
+# Scoping/labels and the `CronJob` note are documented in
+# disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Require non-root execution
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.3 - non-root containers; Phase 12.4 - require non-root execution"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-non-root-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Pods must set runAsNonRoot: true or a non-zero runAsUser."
+        # `anyPattern` (a sibling of `pattern`) succeeds if either full pattern
+        # matches: runAsNonRoot true, or a runAsUser greater than 0.
+        anyPattern:
+          - spec:
+              securityContext:
+                runAsNonRoot: true
+          - spec:
+              securityContext:
+                runAsUser: ">0"
+
+    - name: require-non-root-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "The pod template must set runAsNonRoot: true or a non-zero runAsUser."
+        anyPattern:
+          - spec:
+              template:
+                spec:
+                  securityContext:
+                    runAsNonRoot: true
+          - spec:
+              template:
+                spec:
+                  securityContext:
+                    runAsUser: ">0"

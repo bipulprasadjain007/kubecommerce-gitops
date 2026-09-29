@@ -1,0 +1,151 @@
+# Kyverno ClusterPolicy: no mutable or empty image tags.
+#
+# Encodes guide Phase 12.4 ("disallow latest image tags") and Phase 12.2
+# (immutable image identity). ENFORCE: the kubecommerce chart renders every
+# service and migration Job from `global.imageRegistry` with an explicit tag
+# (or digest), so it complies today.
+#
+# Two independent checks, applied to `containers`, `initContainers` and
+# `ephemeralContainers`:
+#   * `disallow-latest-tag` - no image may end in `:latest` (pattern `!*:latest`).
+#   * `require-image-tag`   - declared via `validate.deny`/JMESPath because a
+#     `*:*` pattern would falsely accept a registry with a port but no tag
+#     (e.g. `registry.local:5000/repo`). The condition only looks at the last
+#     path segment, so `repo`, `repo:tag` and `repo@sha256:...` are classified
+#     correctly while `registry:5000/repo` is rejected.
+#
+# Scoping/labels and the `CronJob` note are documented in
+# disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-disallow-mutable-image-tags
+  annotations:
+    policies.kyverno.io/title: Disallow mutable and empty image tags
+    policies.kyverno.io/category: Supply Chain
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.4 - disallow latest image tags; Phase 12.2 - immutable image identity"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: disallow-latest-tag-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "The :latest image tag is not allowed; pin an immutable tag or digest."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+            =(initContainers):
+              - image: "!*:latest"
+            =(ephemeralContainers):
+              - image: "!*:latest"
+
+    - name: disallow-latest-tag-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "The :latest image tag is not allowed in the pod template; pin an immutable tag or digest."
+        pattern:
+          spec:
+            template:
+              spec:
+                containers:
+                  - image: "!*:latest"
+                =(initContainers):
+                  - image: "!*:latest"
+                =(ephemeralContainers):
+                  - image: "!*:latest"
+
+    - name: require-image-tag-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Every container image must carry an explicit tag or digest (a bare image name defaults to :latest)."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.containers[?contains(split(image, '/')[-1], ':') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.initContainers || `[]`)[?contains(split(image, '/')[-1], ':') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.ephemeralContainers || `[]`)[?contains(split(image, '/')[-1], ':') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+
+    - name: require-image-tag-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Every container image in the pod template must carry an explicit tag or digest."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.template.spec.containers[?contains(split(image, '/')[-1], ':') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.template.spec.initContainers || `[]`)[?contains(split(image, '/')[-1], ':') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0
+              - key: "{{ (request.object.spec.template.spec.ephemeralContainers || `[]`)[?contains(split(image, '/')[-1], ':') == `false`] | length(@) }}"
+                operator: GreaterThan
+                value: 0

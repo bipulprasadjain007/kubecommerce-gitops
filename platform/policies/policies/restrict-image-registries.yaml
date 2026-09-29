@@ -1,0 +1,104 @@
+# Kyverno ClusterPolicy: only approved image registries.
+#
+# Encodes guide Phase 12.4 ("require approved image registries"). AUDIT: the
+# kubecommerce application images are published to
+# `ghcr.io/bipulprasadjain007/*` by the release pipeline. Infra namespaces are an
+# explicit exception: the in-cluster PostgreSQL/Redis/RabbitMQ manifests come
+# from upstream registries, so `platform-system` is both selected and excluded by
+# the `exclude` block below. The monitoring/observability namespaces are outside
+# the scope entirely. Promote to Enforce once the audit report is clean.
+#
+# Scoping/labels and the `CronJob` note are documented in
+# disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict image registries
+    policies.kyverno.io/category: Supply Chain
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.4 - require approved image registries"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: restrict-registry-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      exclude:
+        # Explicit infra exception list (guide 12.4).
+        any:
+          - resources:
+              namespaces: [platform-system]
+          - resources:
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [platform-system]
+      validate:
+        message: "Only images from ghcr.io/bipulprasadjain007/ are approved."
+        pattern:
+          spec:
+            containers:
+              - image: "ghcr.io/bipulprasadjain007/*"
+            =(initContainers):
+              - image: "ghcr.io/bipulprasadjain007/*"
+            =(ephemeralContainers):
+              - image: "ghcr.io/bipulprasadjain007/*"
+
+    - name: restrict-registry-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod, platform-system]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      exclude:
+        any:
+          - resources:
+              namespaces: [platform-system]
+          - resources:
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [platform-system]
+      validate:
+        message: "Only images from ghcr.io/bipulprasadjain007/ are approved for application workloads."
+        pattern:
+          spec:
+            template:
+              spec:
+                containers:
+                  - image: "ghcr.io/bipulprasadjain007/*"
+                =(initContainers):
+                  - image: "ghcr.io/bipulprasadjain007/*"
+                =(ephemeralContainers):
+                  - image: "ghcr.io/bipulprasadjain007/*"

@@ -1,0 +1,97 @@
+# Platform child Application: Kyverno (policy engine) - guide Phase 12.4.
+#
+# Pinned Helm chart from the official Kyverno repository. Kyverno is the engine
+# that runs the ClusterPolicies in platform/policies/policies/ (applied by the
+# sibling Application platform/policies/apps/kyverno-policies.yaml at wave -1).
+#
+# Sync wave -2: after the AppProject (-10) and the namespace Application (-5, see
+# platform/namespaces/namespaces.yaml which now creates the `kyverno` namespace),
+# and before the policies Application (-1). The engine must be installed before
+# its CRDs/controllers are used.
+#
+# `SkipDryRunOnMissingResource=true` lets the first sync succeed while the
+# Kyverno CRDs are still being established; Argo retries until they are.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubecommerce-platform-kyverno
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+    app.kubernetes.io/component: policy
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubecommerce
+  source:
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    # Pinned chart version. The matching Kyverno CLI (v1.19.1) is pinned in
+    # .github/workflows/validate.yml for the policy-validate gate.
+    targetRevision: 3.9.1
+    helm:
+      releaseName: kyverno
+      # Modest, single-replica controllers sized for the local kind cluster. The
+      # chart's own securityContext (non-root, read-only rootfs, RuntimeDefault
+      # seccomp) is left untouched.
+      values: |
+        admissionController:
+          replicas: 1
+          container:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+        backgroundController:
+          replicas: 1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+        cleanupController:
+          replicas: 1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+        reportsController:
+          replicas: 1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # The `kyverno` namespace is owned by platform/namespaces/namespaces.yaml.
+      - CreateNamespace=false
+      # Large CRDs/manifests and deterministic field ownership.
+      - ServerSideApply=true
+      # Kyverno CRDs are not Established on the first pass.
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 3

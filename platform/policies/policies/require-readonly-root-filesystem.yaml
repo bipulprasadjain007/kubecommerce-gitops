@@ -1,0 +1,87 @@
+# Kyverno ClusterPolicy: containers must use a read-only root filesystem.
+#
+# Encodes guide Phase 12.3 ("read-only root filesystem"). AUDIT, scoped to the
+# kubecommerce application namespaces only. The chart sets
+# `readOnlyRootFilesystem: true` globally and writes only to an `emptyDir` mounted
+# at /tmp, so it complies today. Covers `containers`, `initContainers` and
+# `ephemeralContainers`.
+#
+# Scoping/labels and the `CronJob` note are documented in
+# disallow-privileged-containers.yaml.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: kubecommerce-require-readonly-root-filesystem
+  annotations:
+    policies.kyverno.io/title: Require read-only root filesystem
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    kubecommerce.io/guide-requirement: "Phase 12.3 - read-only root filesystem"
+  labels:
+    app.kubernetes.io/part-of: kubecommerce
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-readonly-rootfs-pod
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Pod]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Containers must set securityContext.readOnlyRootFilesystem: true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  readOnlyRootFilesystem: true
+            =(initContainers):
+              - securityContext:
+                  readOnlyRootFilesystem: true
+            =(ephemeralContainers):
+              - securityContext:
+                  readOnlyRootFilesystem: true
+
+    - name: require-readonly-rootfs-workload
+      match:
+        any:
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaceSelector:
+                matchExpressions:
+                  - key: kubernetes.io/metadata.name
+                    operator: In
+                    values: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+          - resources:
+              kinds: [Deployment, StatefulSet, DaemonSet, Job]
+              namespaces: [kubecommerce-dev, kubecommerce-staging, kubecommerce-prod]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/part-of: kubecommerce
+      validate:
+        message: "Containers in the pod template must set securityContext.readOnlyRootFilesystem: true."
+        pattern:
+          spec:
+            template:
+              spec:
+                containers:
+                  - securityContext:
+                      readOnlyRootFilesystem: true
+                =(initContainers):
+                  - securityContext:
+                      readOnlyRootFilesystem: true
+                =(ephemeralContainers):
+                  - securityContext:
+                      readOnlyRootFilesystem: true
